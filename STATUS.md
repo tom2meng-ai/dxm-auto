@@ -9,13 +9,13 @@ STATUS.md
 - Name1/Name2 提取增强：支持输入框、文本标签、标签跨行等多种模式。
 - 搜索配对弹窗逻辑增强：等待结果表格、尝试匹配 SKU 行并点“选择”，并保存调试截图/HTML。
 - 已增加日志：判定平台SKU及 custom_type。
-- 最近一次自动匹配失败点：打开订单详情失败（日志显示“打开订单详情失败”）。
-- 筛选未配对 SKU 偶尔超时（filter_timeout）。
+- 最近一次自动匹配失败点：点击配对按钮失败，原因是“产品动态”弹窗遮挡（detail_opened.png 显示）。
+- 筛选未配对 SKU 仍会超时（filter_timeout）。
 
 待办（建议下一步）
-1) 修复打开订单详情失败：
-   - 优先定位当前行内“详情”按钮；必要时滚动到行并重试点击。
-   - 如果页面有遮罩/弹窗，先关闭再点击。
+1) 修复“点击配对按钮失败”（当前被产品动态弹窗遮挡）：
+   - 打开详情后先关闭弹窗；或在点击配对按钮前强制移除遮罩层。
+   - 定位详情页中的“配对/商品配对/配对SKU”按钮，避免点到顶部导航“商品配对”。
 2) 处理“筛选未配对 SKU 超时”：
    - 增加更稳的等待与重试，或在超时后继续尝试点击过滤条件。
 3) 搜索 SKU 仍可能超时：
@@ -26,6 +26,7 @@ STATUS.md
 - logs/debug/after_filter.html / before_filter.html
 - logs/debug/pair_search_timeout.html
 - logs/debug/filter_timeout.html
+- logs/debug/detail_opened.html / detail_opened.png
 
 关键文件
 - scripts/auto_pair_sku.py
@@ -34,4 +35,3 @@ STATUS.md
 运行命令
 - 保存登录态：python3 scripts/auto_pair_sku.py --save-auth
 - 小批量测试：python3 scripts/auto_pair_sku.py --max-orders 1
-
