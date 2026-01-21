@@ -1,0 +1,33 @@
+{
+  "store_name": "Michael",
+  "red_box_sku": "Michael-RED BOX",
+  "dianxiaomi": {
+    "base_url": "https://www.dianxiaomi.com",
+    "order_page": "/web/order/paid?go=m100",
+    "login_page": "/"
+  },
+  "browser": {
+    "headless": false,
+    "slow_mo": 100,
+    "timeout": 30000
+  },
+  "pair_settings": {
+    "max_orders_per_run": 50,
+    "delay_between_orders": 500,
+    "retry_on_fail": true,
+    "retry_count": 3
+  },
+  "color_map": {
+    "G": "金色",
+    "S": "银色",
+    "B": "黑色",
+    "R": "玫瑰金"
+  },
+  "product_name_map": {
+    "J20": "爱心双扣项链",
+    "J02": "环环相扣项链",
+    "J01": "镂空镶钻爱心手链",
+    "B09": "不锈钢皮革手链",
+    "B11": "编织皮革手链"
+  }
+}
