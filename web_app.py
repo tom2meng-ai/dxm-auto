@@ -199,23 +199,52 @@ def extract_card_code_smart(parts: list, known_cards: set) -> tuple:
     return "", "low", "无法提取卡片代码"
 
 
-def generate_single_sku(product_code: str, date_str: str, name1: str, name2: str) -> str:
-    """生成单个 SKU"""
-    names = f"{name1}+{name2}" if name2 else name1
-    return f"{STORE_NAME}-{product_code}-{date_str}-{names}"
+def generate_single_sku_unique(product_code: str, date_str: str, name1: str, name2: str,
+                                order_no: str, sku_counter: dict) -> str:
+    """生成唯一SKU，重复时自动添加订单号后缀
 
+    Args:
+        product_code: 产品编号
+        date_str: 日期字符串 (MMDD)
+        name1: 第一个名字
+        name2: 第二个名字（可选）
+        order_no: 完整订单号
+        sku_counter: SKU计数器字典
 
-def generate_identifier(order_no: str, name1: str, name2: str) -> str:
-    """生成识别码: 订单号/客户名字
-
-    Examples:
-        >>> generate_identifier("5261219-59178", "Jon", "Lauren")
-        "5261219-59178/Jon+Lauren"
-        >>> generate_identifier("5261219-59178", "Sarah", "")
-        "5261219-59178/Sarah"
+    Returns:
+        唯一的SKU字符串
     """
     names = f"{name1}+{name2}" if name2 else name1
-    return f"{order_no}/{names}"
+    base_sku = f"{STORE_NAME}-{product_code}-{date_str}-{names}"
+
+    # 检测重复
+    if base_sku not in sku_counter:
+        sku_counter[base_sku] = 1
+        return base_sku
+
+    # 添加订单号后缀
+    order_suffix = order_no.split('-')[-1]
+    unique_sku = f"{base_sku}-{order_suffix}"
+
+    return unique_sku
+
+
+def generate_identifier(order_no: str, product_code: str, name1: str) -> str:
+    """生成识别码: 订单后5位-产品编号-完整Name
+
+    Examples:
+        >>> generate_identifier("5261219-59178", "J20", "Jonathan")
+        "59178-J20-Jonathan"
+        >>> generate_identifier("5261219-59178", "B09", "Sarah")
+        "59178-B09-Sarah"
+    """
+    # 提取订单号后5位
+    order_suffix = order_no.split('-')[-1][-5:]
+
+    # 使用完整的Name1
+    name_full = name1 if name1 else ""
+
+    return f"{order_suffix}-{product_code}-{name_full}"
 
 
 def generate_combo_sku(single_sku: str, card_code: str, box_type: str) -> str:
@@ -294,6 +323,10 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
     logs = []
     error_rows = []  # 新增：错误记录
 
+    # 新增：唯一性检测器
+    sku_counter = {}  # SKU重复检测
+    identifier_set = set()  # 识别码重复检测
+
     for idx, row in df_engraved.iterrows():
         order_no = row.get("订单号", "")
         platform_sku = row.get("SKU", "")
@@ -369,8 +402,36 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
             })
             logs.append(f"⚠️ 卡片代码识别不确定: {order_no} - {card_code}")
 
-        single_sku = generate_single_sku(product_code, date_str, name1, name2)
-        identifier = generate_identifier(order_no, name1, name2)
+        # 生成唯一SKU
+        single_sku = generate_single_sku_unique(
+            product_code, date_str, name1, name2,
+            order_no, sku_counter
+        )
+
+        # 生成识别码
+        identifier = generate_identifier(order_no, product_code, name1)
+
+        # 识别码冲突检测
+        if identifier in identifier_set:
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误类型": "识别码重复冲突",
+                "错误详情": f"识别码 {identifier} 已存在（同订单、同产品、Name首字母相同）",
+                "产品规格": product_spec,
+                "Name1": name1,
+                "Name2": name2,
+                "解析出的产品编号": product_code,
+                "解析出的卡片代码": card_code,
+                "卡片置信度": sku_info.get("card_confidence", ""),
+                "建议操作": "请检查是否为重复订单"
+            })
+            logs.append(f"⚠️ 识别码冲突: {identifier} (订单 {order_no})")
+            continue
+
+        identifier_set.add(identifier)
+
+        # 生成组合SKU
         combo_sku = generate_combo_sku(single_sku, card_code, box_type)
 
         # 单个 SKU 记录
