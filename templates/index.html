@@ -211,6 +211,15 @@
             background: #218838;
         }
 
+        .download-btn.error-report {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .download-btn.error-report:hover {
+            background: #e0a800;
+        }
+
         .logs {
             margin-top: 20px;
             max-height: 300px;
@@ -372,7 +381,8 @@
                     result.className = 'result success';
                     document.getElementById('resultTitle').textContent = '✅ 生成成功!';
 
-                    document.getElementById('stats').innerHTML = `
+                    // 统计信息
+                    let statsHtml = `
                         <div class="stat-item">
                             <div class="stat-number">${data.single_count}</div>
                             <div class="stat-label">单个 SKU</div>
@@ -383,10 +393,32 @@
                         </div>
                     `;
 
-                    document.getElementById('downloads').innerHTML = `
+                    // 如果有错误，添加错误统计
+                    if (data.error_count && data.error_count > 0) {
+                        statsHtml += `
+                            <div class="stat-item">
+                                <div class="stat-number" style="color: #ffc107;">${data.error_count}</div>
+                                <div class="stat-label">错误订单</div>
+                            </div>
+                        `;
+                    }
+
+                    document.getElementById('stats').innerHTML = statsHtml;
+
+                    // 下载按钮
+                    let downloadsHtml = `
                         <a href="/download/${data.single_file}" class="download-btn">📥 下载单个SKU文件</a>
                         <a href="/download/${data.combo_file}" class="download-btn">📥 下载组合SKU文件</a>
                     `;
+
+                    // 如果有错误报告，添加错误报告下载按钮
+                    if (data.error_file) {
+                        downloadsHtml += `
+                            <a href="/download/${data.error_file}" class="download-btn error-report">⚠️ 下载错误报告</a>
+                        `;
+                    }
+
+                    document.getElementById('downloads').innerHTML = downloadsHtml;
                 } else {
                     result.className = 'result error';
                     document.getElementById('resultTitle').textContent = '❌ ' + data.error;

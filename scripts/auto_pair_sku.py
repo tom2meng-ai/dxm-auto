@@ -103,6 +103,24 @@ def parse_platform_sku(sku: str) -> Optional[dict]:
     if not sku or not isinstance(sku, str):
         return None
 
+    def _detail_context_ready(self) -> bool:
+        """判断详情弹窗是否可用"""
+        if self._get_detail_container():
+            return True
+        for frame in self.page.frames:
+            try:
+                if frame.locator("text=包裹").first.is_visible():
+                    return True
+                if frame.locator("text=配对商品SKU").first.is_visible():
+                    return True
+                if frame.locator("text=更换").first.is_visible():
+                    return True
+                if frame.locator("text=解除").first.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
     parts = sku.split("-")
     if len(parts) < 3:
         return None
@@ -265,12 +283,20 @@ class DianXiaoMiAutomation:
             for attempt in range(3):
                 logger.info(f"筛选尝试 {attempt + 1}/3")
 
-                # 方法1: 使用正则匹配
-                unpaired_link = self.page.locator("text=/未配对SKU/")
+                # 方法1: 使用正则匹配（含数量）
+                unpaired_link = self.page.locator("text=/未配对SKU\\(\\d+\\)/")
                 if unpaired_link.count() > 0:
                     unpaired_link.first.click()
                     clicked = True
-                    logger.info("方法1成功: text=/未配对SKU/")
+                    logger.info("方法1成功: text=/未配对SKU\\(\\d+\\)/")
+
+                # 方法1.1: 纯文本匹配
+                if not clicked:
+                    unpaired_link = self.page.locator("text=未配对SKU")
+                    if unpaired_link.count() > 0:
+                        unpaired_link.first.click()
+                        clicked = True
+                        logger.info("方法1.1成功: text=未配对SKU")
 
                 # 方法2: 精确文本匹配（带数字）
                 if not clicked:
@@ -387,6 +413,16 @@ class DianXiaoMiAutomation:
                             "element": link
                         })
 
+            # 备用：从包含“详情”的行中提取
+            if not order_rows:
+                detail_rows = self.page.query_selector_all("table tr")
+                for row in detail_rows:
+                    try:
+                        if row.query_selector("a:has-text('详情')"):
+                            order_rows.append(row)
+                    except Exception:
+                        continue
+
             # 从行中提取信息
             for row in order_rows:
                 order_info = self._extract_order_info(row)
@@ -480,6 +516,29 @@ class DianXiaoMiAutomation:
             self._dismiss_overlays()
             current_url = self.page.url
 
+            def _detail_visible() -> bool:
+                if self._get_detail_container():
+                    return True
+                for frame in self.page.frames:
+                    try:
+                        frame_title = frame.locator("text=包裹").first
+                        if frame_title.count() > 0 and frame_title.is_visible():
+                            return True
+                        frame_link = frame.locator("text=配对商品SKU").first
+                        if frame_link.count() > 0 and frame_link.is_visible():
+                            return True
+                    except Exception:
+                        continue
+                return False
+
+            def _wait_detail_visible(timeout_ms: int = 8000) -> bool:
+                start = time.time()
+                while (time.time() - start) * 1000 < timeout_ms:
+                    if _detail_visible():
+                        return True
+                    self.page.wait_for_timeout(300)
+                return False
+
             def _try_click_detail(clickable):
                 try:
                     with self.page.expect_popup(timeout=3000) as popup_info:
@@ -487,42 +546,107 @@ class DianXiaoMiAutomation:
                     new_page = popup_info.value
                     new_page.wait_for_load_state("domcontentloaded")
                     self.page = new_page
-                    return True
+                    return _wait_detail_visible()
                 except PlaywrightTimeout:
                     clickable.click(timeout=5000, force=True)
-                    return False
+                    return _wait_detail_visible()
                 except Exception:
                     clickable.click(timeout=5000, force=True)
-                    return False
+                    return _wait_detail_visible()
+
+            def _click_detail_in_row(row_loc) -> bool:
+                try:
+                    row_loc.scroll_into_view_if_needed()
+                    try:
+                        row_loc.locator(".vxe-body--column.col_17").first.hover()
+                    except Exception:
+                        row_loc.hover()
+                    action_links = row_loc.locator(".actionButton a")
+                    logger.info(f"actionButton links in row: {action_links.count()}")
+                    if action_links.count() > 0:
+                        for i in range(action_links.count()):
+                            try:
+                                action_links.nth(i).click(timeout=3000, force=True)
+                                if _wait_detail_visible():
+                                    return True
+                            except Exception:
+                                continue
+                    detail = row_loc.locator(
+                        ".vxe-body--column.col_17 .actionButton a:nth-child(3)"
+                    ).first
+                    logger.info(f"detail link count in row: {detail.count()}")
+                    if detail.count() > 0:
+                        detail.click(timeout=5000, force=True)
+                        return _wait_detail_visible()
+                except Exception:
+                    pass
+                try:
+                    clicked = row_loc.evaluate(
+                        """
+                        (row) => {
+                          const el = row.querySelector('.vxe-body--column.col_17 .actionButton a:nth-child(3)');
+                          if (!el) return false;
+                          el.click();
+                          return true;
+                        }
+                        """
+                    )
+                    if clicked:
+                        return _wait_detail_visible()
+                except Exception:
+                    pass
+                return False
 
             if row_id:
                 logger.info(f"尝试使用 row_id 打开详情: {row_id}")
             if row_id:
                 row_locator = self.page.locator(f"tr[rowid='{row_id}']").first
                 if row_locator.count() > 0:
-                    row_locator.scroll_into_view_if_needed()
                     self._dismiss_overlays()
-                    detail_btn = row_locator.locator("a:has-text('详情'), span:has-text('详情'), button:has-text('详情')").first
+                    if _click_detail_in_row(row_locator):
+                        return True
+                    row_action = self.page.locator(
+                        f"[rowid='{row_id}'] .actionButton a:nth-child(3)"
+                    ).first
+                    if row_action.count() > 0:
+                        if _try_click_detail(row_action):
+                            return True
+                    detail_btn = row_locator.locator(
+                        ".actionButton a:nth-child(3), a:has-text('详情'), span:has-text('详情'), button:has-text('详情')"
+                    ).first
                     if detail_btn.count() > 0:
                         if _try_click_detail(detail_btn):
                             return True
                         self.page.wait_for_timeout(800)
                         self._dismiss_overlays()
-                        return True
+                        if _wait_detail_visible():
+                            return True
 
-            row_by_order = self.page.locator("tr", has=self.page.locator(".orderCode .pointer", has_text=order_no)).first
+            row_by_order = self.page.locator("tr", has=self.page.locator(f"text={order_no}")).first
             if row_by_order.count() > 0:
-                row_by_order.scroll_into_view_if_needed()
                 self._dismiss_overlays()
-                detail_btn = row_by_order.locator("a:has-text('详情'), span:has-text('详情'), button:has-text('详情')").first
+                if _click_detail_in_row(row_by_order):
+                    return True
+                order_action = self.page.locator(
+                    f".vxe-body--row:has-text('{order_no}') .actionButton a:nth-child(3)"
+                ).first
+                if order_action.count() > 0:
+                    if _try_click_detail(order_action):
+                        return True
+                detail_btn = row_by_order.locator(".actionButton a").nth(2)
+                if detail_btn.count() == 0:
+                    detail_btn = row_by_order.locator(
+                        ".actionButton a:nth-child(3), a:has-text('详情'), span:has-text('详情'), button:has-text('详情')"
+                    ).first
                 if detail_btn.count() > 0:
                     if _try_click_detail(detail_btn):
                         return True
                     self.page.wait_for_timeout(800)
                     self._dismiss_overlays()
                     if self.page.url != current_url:
+                        return _wait_detail_visible()
+                    if _wait_detail_visible():
                         return True
-                    return True
 
             if row_element:
                 try:
@@ -530,6 +654,21 @@ class DianXiaoMiAutomation:
                 except Exception:
                     pass
                 self._dismiss_overlays()
+                try:
+                    row_element.hover()
+                except Exception:
+                    pass
+                try:
+                    detail_handle = row_element.query_selector(
+                        ".actionButton a:nth-child(3), a:has-text('详情'), span:has-text('详情'), button:has-text('详情')"
+                    )
+                    if detail_handle:
+                        detail_handle.click(timeout=5000)
+                        if _wait_detail_visible():
+                            return True
+                except Exception:
+                    pass
+
                 detail_btn = self.page.locator("a:has-text('详情'), span:has-text('详情'), button:has-text('详情')").first
                 if detail_btn.count() > 0:
                     if _try_click_detail(detail_btn):
@@ -537,8 +676,8 @@ class DianXiaoMiAutomation:
                     self.page.wait_for_timeout(800)
                     self._dismiss_overlays()
                     if self.page.url != current_url:
-                        return True
-                    return True
+                        return _wait_detail_visible()
+                    return _wait_detail_visible()
 
             # 方法1：点击"详情"按钮
             detail_btn = self.page.locator("a:has-text('详情'), span:has-text('详情'), button:has-text('详情')").first
@@ -549,8 +688,9 @@ class DianXiaoMiAutomation:
                 self.page.wait_for_timeout(800)
                 self._dismiss_overlays()
                 if self.page.url != current_url:
+                    return _wait_detail_visible()
+                if _wait_detail_visible():
                     return True
-                return True
 
             # 方法2：点击订单号
             order_link = self.page.locator(f"text={order_no}").first
@@ -560,8 +700,9 @@ class DianXiaoMiAutomation:
                 self.page.wait_for_timeout(800)
                 self._dismiss_overlays()
                 if self.page.url != current_url:
+                    return _wait_detail_visible()
+                if _wait_detail_visible():
                     return True
-                return True
             self.save_debug_info("detail_button_not_found")
 
         except PlaywrightTimeout:
@@ -578,73 +719,179 @@ class DianXiaoMiAutomation:
             self._dismiss_overlays()
             self.page.wait_for_timeout(500)
 
-            # 先滚动详情弹窗，确保"配对商品SKU"链接可见
-            # 尝试找到弹窗内的滚动容器并滚动
-            self.page.evaluate("""
-                () => {
-                    // 查找弹窗内的滚动容器
-                    const scrollContainers = document.querySelectorAll('.ant-modal-body, .modal-body, [class*="scroll"], [class*="content"]');
-                    for (const container of scrollContainers) {
-                        if (container.scrollHeight > container.clientHeight) {
-                            container.scrollTop = container.scrollHeight / 2;
-                        }
-                    }
-                }
-            """)
-            self.page.wait_for_timeout(500)
+            detail_container = self._get_detail_container()
+            if detail_container:
+                pair_link = detail_container.locator(
+                    "a:has-text('配对商品SKU'), a:has-text('配对商品SKU'), button:has-text('配对商品SKU'), text=配对商品SKU"
+                ).first
+                if pair_link.count() > 0:
+                    pair_link.scroll_into_view_if_needed()
+                    self.page.wait_for_timeout(300)
+                    pair_link.click(timeout=5000, force=True)
+                    self.page.wait_for_timeout(1500)
+                    logger.info("配对商品SKU链接点击成功 (detail dialog)")
+                    return True
+                pair_cell = detail_container.locator(
+                    "td:has-text('配对商品SKU'), td:has-text('配对商品SKU'), .vxe-body--column:has-text('配对商品SKU')"
+                ).first
+                if pair_cell.count() > 0:
+                    pair_cell.scroll_into_view_if_needed()
+                    self.page.wait_for_timeout(300)
+                    pair_cell.click(timeout=5000, force=True)
+                    self.page.wait_for_timeout(1500)
+                    logger.info("配对商品SKU链接点击成功 (detail cell)")
+                    return True
+                logger.warning("详情弹窗未找到配对商品SKU，可能已配对")
+                return False
 
-            # 精确选择器：基于 .order-sku 父元素
-            possible_selectors = [
-                ".order-sku a:has-text('配对商品SKU')",
-                "a:has(.icon_link):has-text('配对商品SKU')",
-                "a:has-text('配对商品SKU')",
-                "text=配对商品SKU",
+            for frame in self.page.frames:
+                try:
+                    frame_link = frame.locator(
+                        "a:has-text('配对商品SKU'), a:has-text('配对商品SKU'), button:has-text('配对商品SKU'), text=配对商品SKU"
+                    ).first
+                    if frame_link.count() > 0 and frame_link.is_visible():
+                        frame_link.scroll_into_view_if_needed()
+                        frame_link.click(timeout=5000, force=True)
+                        self.page.wait_for_timeout(1500)
+                        logger.info("配对商品SKU链接点击成功 (frame)")
+                        return True
+                except Exception:
+                    continue
+
+            # 保存当前状态用于调试
+            self.save_debug_info("before_click_pair_button")
+
+            # 方法1: 检查是否在详情弹窗中，直接查找所有包含"配对"的链接
+            all_links = self.page.query_selector_all("a, button, span")
+            pair_links = []
+            for el in all_links:
+                try:
+                    text = el.inner_text().strip()
+                    if "配对" in text or "pair" in text.lower():
+                        pair_links.append((el, text))
+                except Exception:
+                    continue
+
+            logger.info(f"找到 {len(pair_links)} 个包含'配对'的元素")
+            # 记录所有配对相关元素
+            for el, text in pair_links:
+                try:
+                    visible = el.is_visible()
+                    logger.info(f"配对元素: '{text}' (visible: {visible})")
+                except Exception:
+                    logger.info(f"配对元素: '{text}'")
+
+            for el, text in pair_links:
+                try:
+                    logger.info(f"尝试点击: '{text}'")
+                    el.scroll_into_view_if_needed()
+                    self.page.wait_for_timeout(200)
+                    el.click(timeout=3000, force=True)
+                    self.page.wait_for_timeout(1000)
+                    # 检查是否弹出搜索对话框
+                    search_elements = self.page.query_selector_all("input[placeholder*='搜索'], input[name*='search'], .ant-modal input")
+                    if search_elements:
+                        logger.info(f"配对商品SKU链接点击成功 (通过文本匹配: {text})")
+                        return True
+                except Exception as e:
+                    logger.debug(f"点击失败: {e}")
+                    continue
+
+            # 方法2: 使用更宽泛的选择器
+            broad_selectors = [
+                "a:has-text('配对')",
+                "button:has-text('配对')",
+                "span:has-text('配对')",
+                "div:has-text('配对')",
+                "[onclick*='pair']",
+                "[data-action*='pair']"
             ]
 
-            for selector in possible_selectors:
-                link = self.page.locator(selector).first
-                if link.count() > 0:
+            for selector in broad_selectors:
+                links = self.page.query_selector_all(selector)
+                for link in links:
                     try:
-                        # 先滚动到元素可见
                         link.scroll_into_view_if_needed()
-                        self.page.wait_for_timeout(300)
-                        link.click(timeout=5000, force=True)
-                        self.page.wait_for_timeout(1500)
-                        logger.info(f"配对商品SKU链接点击成功 (selector: {selector})")
-                        return True
-                    except Exception as click_err:
-                        logger.debug(f"点击 {selector} 失败: {click_err}")
+                        self.page.wait_for_timeout(200)
+                        link.click(timeout=3000, force=True)
+                        self.page.wait_for_timeout(1000)
+                        # 检查是否弹出搜索框
+                        search_input = self.page.locator("input").first
+                        if search_input.count() > 0 and search_input.is_visible():
+                            logger.info(f"配对商品SKU链接点击成功 (selector: {selector})")
+                            return True
+                    except Exception:
                         continue
 
-            # 备用方案：使用 JavaScript 滚动并点击
+            # 方法3: 使用JavaScript查找并点击
             clicked = self.page.evaluate("""
                 () => {
-                    // 在 .order-sku 容器中查找
-                    const orderSkuDivs = document.querySelectorAll('.order-sku');
-                    for (const div of orderSkuDivs) {
-                        const link = div.querySelector('a');
-                        if (link && link.innerText && link.innerText.includes('配对商品SKU')) {
-                            link.scrollIntoView({ block: 'center' });
-                            link.click();
+                    const elements = document.querySelectorAll('a, button, span, div');
+                    for (const el of elements) {
+                        const text = el.innerText || el.textContent || '';
+                        if (text.includes('配对商品SKU') || (text.includes('配对') && text.includes('SKU'))) {
+                            el.scrollIntoView({ block: 'center' });
+                            el.click();
                             return true;
                         }
                     }
-                    // 备用：直接查找所有链接
-                    const links = document.querySelectorAll('a');
-                    for (const link of links) {
-                        if (link.innerText && link.innerText.trim() === '配对商品SKU') {
-                            link.scrollIntoView({ block: 'center' });
-                            link.click();
+                    // 更宽泛的匹配
+                    for (const el of elements) {
+                        const text = el.innerText || el.textContent || '';
+                        if (text.includes('配对') && !text.includes('已配对')) {
+                            el.scrollIntoView({ block: 'center' });
+                            el.click();
                             return true;
                         }
                     }
                     return false;
                 }
             """)
+
             if clicked:
-                self.page.wait_for_timeout(1500)
-                logger.info("通过JS点击配对商品SKU链接成功")
-                return True
+                self.page.wait_for_timeout(2000)
+                # 检查弹窗是否出现
+                modal_appeared = False
+                modal_selectors = [".ant-modal", ".modal", "dialog", ".ant-modal-wrap"]
+                for sel in modal_selectors:
+                    if self.page.locator(sel).count() > 0:
+                        modal_appeared = True
+                        logger.info(f"检测到弹窗出现: {sel}")
+                        break
+                if modal_appeared:
+                    logger.info("通过JS点击配对商品SKU链接成功")
+                    return True
+                else:
+                    logger.warning("点击后未检测到弹窗，可能需要更长时间等待")
+                    self.page.wait_for_timeout(3000)
+                    for sel in modal_selectors:
+                        if self.page.locator(sel).count() > 0:
+                            modal_appeared = True
+                            logger.info(f"延迟后检测到弹窗: {sel}")
+                            break
+                    if modal_appeared:
+                        logger.info("通过JS点击配对商品SKU链接成功")
+                        return True
+                    else:
+                        logger.warning("点击后仍未检测到弹窗")
+                        return False
+
+            # 方法4: 如果弹窗已经打开，查找弹窗内的按钮
+            modal_selectors = [
+                ".ant-modal a:has-text('配对')",
+                ".modal a:has-text('配对')",
+                "dialog a:has-text('配对')"
+            ]
+            for selector in modal_selectors:
+                try:
+                    link = self.page.locator(selector).first
+                    if link.count() > 0 and link.is_visible():
+                        link.click(timeout=3000)
+                        self.page.wait_for_timeout(1000)
+                        logger.info(f"配对商品SKU链接点击成功 (modal selector: {selector})")
+                        return True
+                except Exception:
+                    continue
 
             self.save_debug_info("pair_button_not_found")
             logger.warning("未找到配对商品SKU链接")
@@ -658,24 +905,37 @@ class DianXiaoMiAutomation:
         """检查当前订单是否已配对"""
         try:
             self.page.wait_for_timeout(500)
+            detail_container = self._get_detail_container()
+            if not detail_container:
+                for frame in self.page.frames:
+                    try:
+                        frame_pair = frame.locator("text=配对商品SKU").first
+                        if frame_pair.count() > 0 and frame_pair.is_visible():
+                            logger.info("检测到未配对订单（frame存在配对商品SKU）")
+                            return False
+                        frame_change = frame.locator("text=更换").first
+                        frame_unbind = frame.locator("text=解除").first
+                        if (frame_change.count() > 0 and frame_change.is_visible()) or (
+                            frame_unbind.count() > 0 and frame_unbind.is_visible()
+                        ):
+                            logger.info("检测到已配对订单（frame存在更换/解除）")
+                            return True
+                    except Exception:
+                        continue
+                logger.warning("未检测到订单详情弹窗")
+                return False
 
-            # 多种方式检查"配对商品SKU"链接
-            pair_selectors = [
-                "text=配对商品SKU",
-                "a:has-text('配对商品SKU')",
-                "span:has-text('配对商品SKU')",
-                "text=配对"
-            ]
+            pair_link = detail_container.locator("text=配对商品SKU").first
+            if pair_link.count() > 0:
+                logger.info("检测到未配对订单（详情弹窗存在配对商品SKU）")
+                return False
 
-            for selector in pair_selectors:
-                pair_link = self.page.locator(selector).first
-                if pair_link.count() > 0:
-                    # 不检查 is_visible()，只检查元素存在
-                    logger.info(f"检测到未配对订单（找到'{selector}'）")
-                    return False
+            if detail_container.locator("text=更换").count() > 0 or detail_container.locator("text=解除").count() > 0:
+                logger.info("检测到已配对订单（存在更换/解除）")
+                return True
 
-            logger.info("检测到已配对订单（未找到配对链接）")
-            return True
+            logger.warning("未找到配对入口，无法确认已配对，跳过审核")
+            return False
         except Exception as e:
             logger.debug(f"检查配对状态失败: {e}")
             return False  # 出错时默认未配对，确保尝试配对
@@ -813,39 +1073,119 @@ class DianXiaoMiAutomation:
         except Exception:
             pass
 
+    def _get_detail_container(self):
+        """获取订单详情弹窗容器"""
+        selectors = [
+            "dialog:has-text('包裹')",
+            "dialog:has-text('详情 - 来源')",
+            ".ant-modal:has-text('包裹')",
+            ".ant-modal:has-text('详情 - 来源')",
+            ".ant-modal-wrap:has-text('包裹')",
+            ".ant-modal-wrap:has-text('详情 - 来源')",
+            ".ant-modal.order-default-modal"
+        ]
+        for sel in selectors:
+            container = self.page.locator(sel).first
+            if container.count() == 0:
+                continue
+            try:
+                if container.is_visible():
+                    return container
+            except Exception:
+                continue
+        return None
+
     def search_and_select_sku(self, sku: str) -> bool:
         """搜索并选择 SKU"""
         logger.info(f"搜索 SKU: {sku}")
 
         try:
-            # 等待配对弹窗加载
-            self.page.wait_for_timeout(1500)
+            # 等待配对弹窗加载 - 增加等待时间
+            logger.info("等待配对弹窗加载...")
+            self.page.wait_for_timeout(3000)
+            self.save_debug_info("pair_search_start")
 
-            # 方法1: 使用精确的搜索输入框selector
-            search_input = self.page.locator("#searchWareHoseProductsValue").first
-            if search_input.count() == 0:
-                # 备用selector
-                search_input = self.page.locator("input[name='searchWareHoseProductsValue']").first
+            # 检查弹窗是否已打开
+            modal_selectors = [".ant-modal", ".modal", "dialog"]
+            modal_found = False
+            for sel in modal_selectors:
+                if self.page.locator(sel).count() > 0:
+                    modal_found = True
+                    logger.info(f"检测到弹窗: {sel}")
+                    break
+            if not modal_found:
+                logger.warning("未检测到配对弹窗，可能打开失败")
+                return False
 
-            if search_input.count() == 0:
-                # 再次备用
-                search_input = self.page.locator(".ant-modal input.ant-input").first
+            # 方法1: 查找所有输入框，优先选择包含"搜索"或placeholder相关的
+            input_elements = self.page.query_selector_all("input")
+            search_input = None
 
-            if search_input.count() == 0:
+            for inp in input_elements:
+                try:
+                    placeholder = (inp.get_attribute("placeholder") or "").lower()
+                    name = (inp.get_attribute("name") or "").lower()
+                    id_attr = (inp.get_attribute("id") or "").lower()
+
+                    if ("search" in placeholder or "搜索" in placeholder or
+                        "search" in name or "sku" in name or
+                        "search" in id_attr or "sku" in id_attr):
+                        if inp.is_visible():
+                            search_input = inp
+                            logger.info(f"找到搜索输入框 (placeholder: {placeholder}, name: {name}, id: {id_attr})")
+                            break
+                except Exception:
+                    continue
+
+            # 方法2: 如果没找到，查找弹窗内的第一个可见输入框
+            if not search_input:
+                modals = self.page.query_selector_all(".ant-modal, .modal, dialog")
+                for modal in modals:
+                    inputs = modal.query_selector_all("input")
+                    for inp in inputs:
+                        if inp.is_visible():
+                            search_input = inp
+                            logger.info("在弹窗中找到输入框")
+                            break
+                    if search_input:
+                        break
+
+            # 方法3: 兜底查找所有可见输入框
+            if not search_input:
+                for inp in input_elements:
+                    if inp.is_visible():
+                        search_input = inp
+                        logger.info("使用第一个可见输入框")
+                        break
+
+            if not search_input:
                 self.save_debug_info("pair_search_input_not_found")
                 logger.warning("未找到搜索输入框")
                 return False
 
-            logger.info("找到搜索输入框，输入SKU...")
+            logger.info("输入SKU...")
 
             # 清空并输入SKU
             search_input.fill("")
             search_input.fill(sku)
-            self.page.wait_for_timeout(300)
+            self.page.wait_for_timeout(500)
 
             # 点击搜索按钮
-            search_btn = self.page.locator("button:has-text('搜索')").first
-            if search_btn.count() > 0:
+            search_buttons = self.page.query_selector_all("button, input[type='submit']")
+            search_btn = None
+
+            for btn in search_buttons:
+                try:
+                    text = btn.inner_text().strip().lower()
+                    if "搜索" in text or "search" in text or "查询" in text or "find" in text:
+                        if btn.is_visible():
+                            search_btn = btn
+                            logger.info(f"找到搜索按钮: '{text}'")
+                            break
+                except Exception:
+                    continue
+
+            if search_btn:
                 search_btn.click(force=True)
                 logger.info("点击搜索按钮")
             else:
@@ -857,8 +1197,21 @@ class DianXiaoMiAutomation:
             self.page.wait_for_timeout(2000)
 
             # 点击"选择"按钮
-            select_btn = self.page.locator("span:has-text('选择'), a:has-text('选择')").first
-            if select_btn.count() > 0:
+            select_buttons = self.page.query_selector_all("button, a, span")
+            select_btn = None
+
+            for btn in select_buttons:
+                try:
+                    text = btn.inner_text().strip().lower()
+                    if "选择" in text or "select" in text or "选择" in text:
+                        if btn.is_visible():
+                            select_btn = btn
+                            logger.info(f"找到选择按钮: '{text}'")
+                            break
+                except Exception:
+                    continue
+
+            if select_btn:
                 select_btn.click(force=True)
                 self.page.wait_for_timeout(1000)
                 logger.info(f"SKU 配对成功: {sku}")
@@ -889,6 +1242,10 @@ class DianXiaoMiAutomation:
 
             logger.info(f"当前订单: SKU={platform_sku}, Name1={name1}, Name2={name2}")
 
+            if not self._detail_context_ready():
+                logger.warning("详情弹窗未就绪，跳过审核与配对")
+                return False
+
             # 检查是否已配对
             if self.is_order_paired():
                 logger.info("订单已配对，直接审核")
@@ -900,7 +1257,10 @@ class DianXiaoMiAutomation:
 
             # 检查是否为 engraved 订单
             if sku_info and sku_info["custom_type"] != "engraved":
-                logger.info(f"非定制订单，跳过配对，直接审核")
+                logger.info("非定制订单，跳过配对")
+                if not self._detail_context_ready():
+                    logger.warning("详情弹窗未就绪，跳过审核")
+                    return False
                 self.click_review_button()
                 return True
 
@@ -969,6 +1329,10 @@ class DianXiaoMiAutomation:
         self.save_debug_info("detail_opened")
         self.page.wait_for_timeout(1000)
 
+        if not self._detail_context_ready():
+            logger.warning("详情弹窗未就绪，跳过审核与配对")
+            return False
+
         # 检查是否已配对
         if self.is_order_paired():
             logger.info("订单已配对，直接审核")
@@ -988,7 +1352,10 @@ class DianXiaoMiAutomation:
 
         # 只处理 engraved 订单
         if sku_info and sku_info["custom_type"] != "engraved":
-            logger.info(f"非定制订单，跳过配对，直接审核")
+            logger.info("非定制订单，跳过配对")
+            if not self._detail_context_ready():
+                logger.warning("详情弹窗未就绪，跳过审核")
+                return False
             self.click_review_button()
             self.progress["processed_orders"].append(order_no)
             save_progress(self.progress)
