@@ -99,7 +99,12 @@ def save_progress(progress: dict):
 
 
 def parse_platform_sku(sku: str) -> Optional[dict]:
-    """解析平台 SKU"""
+    """解析平台 SKU
+
+    支持两种格式：
+    - 有颜色: B03-B-engraved-MAN10-whitebox
+    - 无颜色: B03-engraved-MAN10-whitebox
+    """
     if not sku or not isinstance(sku, str):
         return None
 
@@ -109,22 +114,30 @@ def parse_platform_sku(sku: str) -> Optional[dict]:
 
     result = {
         "product_code": parts[0],
-        "color": parts[1] if len(parts) > 1 else "",
+        "color": "",
         "custom_type": "",
         "card_code": "",
         "box_type": "whitebox",
         "original_sku": sku
     }
 
-    for i, part in enumerate(parts[2:], start=2):
+    # 智能检测第二部分是颜色还是其他内容
+    # 颜色代码通常是单个字母（B, G, S, X 等）
+    if len(parts[1]) == 1 and parts[1].isalpha():
+        result["color"] = parts[1]
+        remaining_parts = parts[2:]
+    else:
+        # 无颜色格式，第二部分直接是 engraved 或其他
+        result["color"] = ""
+        remaining_parts = parts[1:]
+
+    for part in remaining_parts:
         part_lower = part.lower()
         if part_lower == "engraved":
             result["custom_type"] = "engraved"
         elif part_lower in ("whitebox", "ledbox", "led"):
             result["box_type"] = "ledbox" if "led" in part_lower else "whitebox"
-        elif i == len(parts) - 2 and result["custom_type"]:
-            result["card_code"] = part
-        elif not result["card_code"] and part_lower not in ("whitebox", "ledbox", "led"):
+        elif not result["card_code"] and part_lower not in ("whitebox", "ledbox", "led", "engraved"):
             result["card_code"] = part
 
     return result
@@ -693,9 +706,17 @@ class DianXiaoMiAutomation:
         """点击下一个按钮"""
         logger.info("点击下一个按钮...")
         try:
-            self._dismiss_overlays()
+            # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
 
-            # 尝试多种方式点击"下一个"按钮
+            # 使用 getByRole 精确定位"下一个"按钮
+            next_btn = self.page.get_by_role("button", name="下一个")
+            if next_btn.count() > 0:
+                next_btn.first.click(timeout=5000, force=True)  # 使用 force=True 避免被遮挡
+                self.page.wait_for_timeout(1500)
+                logger.info("切换到下一个订单")
+                return True
+
+            # 备用方案：尝试多种选择器
             next_selectors = [
                 "button:has-text('下一个')",
                 "a:has-text('下一个')",
@@ -707,7 +728,6 @@ class DianXiaoMiAutomation:
                 btn = self.page.locator(selector).first
                 if btn.count() > 0:
                     try:
-                        # 使用 force=True 强制点击，忽略遮挡
                         btn.click(timeout=3000, force=True)
                         self.page.wait_for_timeout(1500)
                         logger.info("切换到下一个订单")
@@ -1027,12 +1047,32 @@ class DianXiaoMiAutomation:
 
             self.save_debug_info("pair_no_select_button")
             logger.warning(f"未找到选择按钮，SKU可能不存在: {sku}")
+            # 关闭配对弹窗，避免阻挡后续操作
+            self._close_pair_modal()
             return False
 
         except Exception as e:
             self.save_debug_info("pair_search_error")
             logger.error(f"搜索 SKU 失败: {e}")
+            # 关闭配对弹窗，避免阻挡后续操作
+            self._close_pair_modal()
             return False
+
+    def _close_pair_modal(self):
+        """关闭配对弹窗"""
+        try:
+            # 点击弹窗的关闭按钮
+            close_btn = self.page.locator(".ant-modal-close").first
+            if close_btn.count() > 0 and close_btn.is_visible():
+                close_btn.click(force=True)
+                self.page.wait_for_timeout(500)
+                logger.info("关闭配对弹窗")
+                return
+            # 备用：按 ESC
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(500)
+        except Exception:
+            pass
 
     def process_current_order_in_detail(self, date_str: str) -> bool:
         """处理当前在详情弹窗中显示的订单"""
@@ -1047,6 +1087,11 @@ class DianXiaoMiAutomation:
             # 从详情页提取名称
             name1 = self._extract_name_from_detail("Name 1")
             name2 = self._extract_name_from_detail("Name 2")
+
+            # 如果 Name 1 为空，尝试 Name Engraving（单 SKU 场景）
+            if not name1:
+                name1 = self._extract_name_from_detail("Name Engraving")
+                # 单个刻字场景没有 Name 2，保持为空
 
             logger.info(f"当前订单: SKU={platform_sku}, Name1={name1}, Name2={name2}")
 
@@ -1163,6 +1208,10 @@ class DianXiaoMiAutomation:
             name1 = self._extract_name_from_detail("Name 1")
             name2 = self._extract_name_from_detail("Name 2")
 
+            # Fallback: 单 SKU 场景使用 Name Engraving
+            if not name1:
+                name1 = self._extract_name_from_detail("Name Engraving")
+
         if not name1:
             self.save_debug_info("detail_missing_name1")
             logger.warning(f"订单 {order_no} 缺少 Name1")
@@ -1199,39 +1248,31 @@ class DianXiaoMiAutomation:
         return False
 
     def _extract_name_from_detail(self, field_name: str) -> str:
-        """从订单详情中提取字段值"""
+        """从订单详情弹窗中提取字段值（只从弹窗内提取，不是整个页面）"""
         try:
-            # 尝试多种定位方式
-            patterns = [
-                f"text={field_name}:",
-                f"text={field_name}：",
-                f"[data-field='{field_name}']"
-            ]
+            # 首先获取详情弹窗容器
+            detail_container = self._get_detail_container()
 
-            for pattern in patterns:
-                el = self.page.locator(pattern).first
-                if el.count() > 0:
-                    text = el.inner_text()
-                    # 提取冒号后的值
-                    if ":" in text or "：" in text:
-                        return text.split(":", 1)[-1].split("：", 1)[-1].strip()
-                    return text.strip()
+            # 如果找到弹窗容器，只从容器内提取
+            if detail_container:
+                container_text = detail_container.inner_text()
+                value = self._extract_label_value_from_text(container_text, field_name)
+                if value:
+                    logger.debug(f"从详情弹窗提取到 {field_name}: {value}")
+                    return value
 
-            # 从输入框中提取（若页面为表单展示）
-            inputs = self.page.query_selector_all("input, textarea")
-            for el in inputs:
-                placeholder = (el.get_attribute("placeholder") or "").strip()
-                aria_label = (el.get_attribute("aria-label") or "").strip()
-                if field_name in placeholder or field_name in aria_label:
-                    value = (el.input_value() or "").strip()
-                    if value:
-                        return value
-
-            # 兜底：从页面文本中提取
-            page_text = self.page.inner_text("body")
-            value = self._extract_label_value_from_text(page_text, field_name)
-            if value:
-                return value
+            # 备用：尝试从可见的弹窗中提取
+            modals = self.page.locator(".ant-modal-body, .modal-body, dialog").all()
+            for modal in modals:
+                try:
+                    if modal.is_visible():
+                        modal_text = modal.inner_text()
+                        value = self._extract_label_value_from_text(modal_text, field_name)
+                        if value:
+                            logger.debug(f"从弹窗提取到 {field_name}: {value}")
+                            return value
+                except Exception:
+                    continue
 
         except Exception as e:
             logger.debug(f"提取 {field_name} 失败: {e}")
@@ -1243,6 +1284,7 @@ class DianXiaoMiAutomation:
         label_map = {
             "Name 1": ["Name 1", "Name1", "name 1", "name1", "Text 1", "text 1", "Line 1", "line 1", "刻字1", "刻字 1", "定制1", "定制 1"],
             "Name 2": ["Name 2", "Name2", "name 2", "name2", "Text 2", "text 2", "Line 2", "line 2", "刻字2", "刻字 2", "定制2", "定制 2"],
+            "Name Engraving": ["Name Engraving", "name engraving", "Engraving Name", "engraving name", "Name engraving", "刻字", "定制名"],
         }
         labels = label_map.get(field_name, [field_name])
         lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -1262,24 +1304,52 @@ class DianXiaoMiAutomation:
         return ""
 
     def _extract_platform_sku_from_detail(self) -> str:
-        """从订单详情中提取平台 SKU"""
+        """从订单详情弹窗中提取平台 SKU（只从弹窗内提取，不是整个页面）"""
         try:
-            self.page.wait_for_timeout(1000)
+            self.page.wait_for_timeout(500)
+
+            # 首先获取详情弹窗容器
+            detail_container = self._get_detail_container()
+
             candidates = []
-            meta_elements = self.page.query_selector_all(".order-sku__meta")
-            for el in meta_elements:
-                meta_text = el.inner_text()
-                candidates.extend(re.findall(r"[A-Z]\d{2,}-[A-Z]-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", meta_text))
 
+            # 如果找到弹窗容器，只从容器内提取
+            if detail_container:
+                # 尝试从 .order-sku__meta 元素提取
+                meta_elements = detail_container.locator(".order-sku__meta").all()
+                for el in meta_elements:
+                    try:
+                        meta_text = el.inner_text()
+                        candidates.extend(re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", meta_text))
+                    except Exception:
+                        continue
+
+                # 如果没找到，从整个弹窗文本提取
+                if not candidates:
+                    container_text = detail_container.inner_text()
+                    candidates = re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", container_text)
+
+            # 备用：尝试从可见的弹窗中提取
             if not candidates:
-                text = self.page.inner_text("body")
-                candidates = re.findall(r"[A-Z]\d{2,}-[A-Z]-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", text)
+                modals = self.page.locator(".ant-modal-body, .modal-body, dialog").all()
+                for modal in modals:
+                    try:
+                        if modal.is_visible():
+                            modal_text = modal.inner_text()
+                            candidates = re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", modal_text)
+                            if candidates:
+                                break
+                    except Exception:
+                        continue
 
+            # 优先返回包含 engraved 的 SKU
             engraved_candidates = [c for c in candidates if "engraved" in c.lower()]
             for candidate in engraved_candidates + candidates:
                 candidate = candidate.strip()
                 if parse_platform_sku(candidate):
+                    logger.debug(f"从详情弹窗提取到 SKU: {candidate}")
                     return candidate
+
         except Exception as e:
             logger.debug(f"提取平台 SKU 失败: {e}")
 
