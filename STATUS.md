@@ -1,64 +1,117 @@
-STATUS.md
+# STATUS.md
 
-目的
+## 目的
 - 修复店小秘自动配对流程，确保能自动登录、筛选未配对订单、解析 SKU、提取 Name1/Name2、搜索并选择 SKU。
 - 优化 SKU 生成器的唯一性保证机制，确保识别码和 SKU 不重复。
 
-当前改动与结果
+---
 
-## 自动配对功能 (scripts/auto_pair_sku.py)
-- 统一登录域名为 https://www.dianxiaomi.com，并保存登录态可识别 home.htm。
-- 列表页/详情页 SKU 解析已改进：详情页从 .order-sku__meta 抽取并优先包含 engraved 的平台 SKU。
-- Name1/Name2 提取增强：支持输入框、文本标签、标签跨行等多种模式。
-- 搜索配对弹窗逻辑增强：等待结果表格、尝试匹配 SKU 行并点"选择"，并保存调试截图/HTML。
-- 已增加日志：判定平台SKU及 custom_type。
-- 最近一次自动匹配失败点：点击配对按钮失败，原因是"产品动态"弹窗遮挡（detail_opened.png 显示）。
-- 筛选未配对 SKU 仍会超时（filter_timeout）。
+## 当前改动与结果
 
-## SKU 生成器优化 (web_app.py) ✅ 已完成 (2026-01-22)
-- **识别码格式优化**：从 "订单号/Name" 改为 "订单后5位-产品编号-完整Name"
-  - 旧格式：`5261219-59178/Jon+Lauren` (25+ 字符)
-  - 新格式：`59178-J20-Jonathan` (14-23 字符)
-  - 保留完整客户名字，提高可读性和识别度
+### 自动配对功能 (scripts/auto_pair_sku.py) - 2026-01-22 更新
 
-- **SKU 唯一性保证**：添加自动重复检测机制
-  - 函数重命名：`generate_single_sku()` → `generate_single_sku_unique()`
-  - 新增 `sku_counter` 字典进行重复检测
-  - 重复 SKU 自动添加订单号后缀（如：`Michael-J20-0122-Jon+Lauren-59999`）
-  - 确保 100% 唯一性
+#### ✅ 已修复的问题
 
-- **识别码冲突检测**：防止识别码重复
-  - 新增 `identifier_set` 集合进行去重检测
-  - 检测同订单、同产品、同名字的极端冲突情况
-  - 冲突时自动跳过并记录到错误报告
+1. **"详情"按钮点击问题** - 已修复
+   - 问题：之前代码会遍历点击所有按钮，导致误点"审核"按钮
+   - 解决：使用 `page.get_by_role("link", name="详情")` 精确定位
+   - 来源：通过 `npx playwright codegen` 录制获取正确选择器
 
-- **错误报告增强**：
-  - 新增错误类型："识别码重复冲突"
-  - 详细说明冲突原因和建议操作
-  - 帮助用户快速定位问题订单
+2. **"配对商品SKU"链接点击问题** - 已修复
+   - 问题：`_dismiss_overlays()` 方法关闭了详情弹窗，导致找不到链接
+   - 解决：在 `click_pair_sku_button()` 和 `process_current_order_in_detail()` 中移除了 `_dismiss_overlays()` 调用
+   - 使用 `page.get_by_role("link", name="配对商品SKU")` 精确定位
 
+3. **自动点击"审核"按钮问题** - 已修复
+   - 问题：代码在多处自动调用 `click_review_button()`，导致订单被错误审核
+   - 解决：移除所有自动审核调用，让用户手动审核
+
+4. **代码简化**
+   - 删除了 `open_order_detail()` 中复杂的嵌套函数和多重尝试逻辑
+   - 删除了 `click_pair_sku_button()` 中冗余的多种定位方法
+   - 代码更清晰，维护更容易
+
+#### ✅ 测试验证通过的流程
+
+| 步骤 | 状态 | 说明 |
+|------|------|------|
+| 1. 筛选未配对订单 | ✅ 成功 | 点击"未配对SKU"筛选 |
+| 2. 点击"详情"按钮 | ✅ 成功 | 不再误点"审核" |
+| 3. 检测未配对状态 | ✅ 成功 | 识别"配对商品SKU"链接 |
+| 4. 点击"配对商品SKU" | ✅ 成功 | 弹出搜索弹窗 |
+| 5. 输入SKU并搜索 | ✅ 成功 | 找到输入框和搜索按钮 |
+| 6. 点击"选择"完成配对 | ⚠️ 待验证 | 需要SKU已存在于商品库 |
+
+#### ⚠️ 当前卡点
+
+**SKU 不存在问题**：搜索 `Michael-J20-0122-Harminder+Harpreet` 时未找到匹配结果
+- 原因：该 SKU 尚未导入店小秘商品库
+- 解决：需要先用 Web 界面生成 SKU 并导入，再运行自动配对
+
+---
+
+### SKU 生成器 (web_app.py) ✅ 已完成 (2026-01-22)
+
+- **识别码格式优化**：`订单后5位-产品编号-完整Name`
+- **SKU 唯一性保证**：自动检测重复，冲突时添加订单号后缀
+- **错误报告增强**：详细的错误类型和建议操作
 - **提交记录**：commit `dca96fe` 已推送到 GitHub
 
-待办（建议下一步）
-1) 修复“点击配对按钮失败”（当前被产品动态弹窗遮挡）：
-   - 打开详情后先关闭弹窗；或在点击配对按钮前强制移除遮罩层。
-   - 定位详情页中的“配对/商品配对/配对SKU”按钮，避免点到顶部导航“商品配对”。
-2) 处理“筛选未配对 SKU 超时”：
-   - 增加更稳的等待与重试，或在超时后继续尝试点击过滤条件。
-3) 搜索 SKU 仍可能超时：
-   - 根据 logs/debug/pair_search_timeout.html 精准定位搜索输入框与按钮。
-   - 当前弹窗中 “选择” 按钮存在，但搜索输入框可能不在 HTML（动态/Shadow/iframe）。
+---
 
-相关日志与调试文件
-- logs/debug/after_filter.html / before_filter.html
-- logs/debug/pair_search_timeout.html
-- logs/debug/filter_timeout.html
-- logs/debug/detail_opened.html / detail_opened.png
+## 待办（下一步）
 
-关键文件
-- scripts/auto_pair_sku.py
-- config/config.json
+### 优先级 1：优化 engraved 订单筛选
+- [ ] 在列表页就过滤 engraved 订单，避免打开非定制订单的详情
+- [ ] 只处理 SKU 包含 "engraved" 的订单
 
-运行命令
-- 保存登录态：python3 scripts/auto_pair_sku.py --save-auth
-- 小批量测试：python3 scripts/auto_pair_sku.py --max-orders 1
+### 优先级 2：验证完整配对流程
+- [ ] 使用一个已导入 SKU 的订单测试完整流程
+- [ ] 确认"选择"按钮点击成功
+
+### 优先级 3：错误处理优化
+- [ ] SKU 不存在时的友好提示
+- [ ] 配对失败后的重试机制
+
+---
+
+## 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| scripts/auto_pair_sku.py | 自动配对主脚本 |
+| web_app.py | SKU 生成器 Web 界面 |
+| config/config.json | 配置文件 |
+| config/card_mapping.json | 卡片代码映射表 |
+
+---
+
+## 运行命令
+
+```bash
+# 保存登录态
+python3 scripts/auto_pair_sku.py --save-auth
+
+# 小批量测试（1个订单）
+python3 scripts/auto_pair_sku.py --max-orders 1
+
+# 批量处理（10个订单）
+python3 scripts/auto_pair_sku.py --max-orders 10
+
+# 启动 SKU 生成器 Web 界面
+python3 web_app.py
+```
+
+---
+
+## 调试文件位置
+
+- `logs/debug/before_filter.png` - 筛选前截图
+- `logs/debug/after_filter.png` - 筛选后截图
+- `logs/debug/pair_button_not_found.png` - 配对按钮未找到截图
+- `logs/debug/pair_search_start.png` - 搜索开始截图
+- `logs/auto_pair.log` - 运行日志
+
+---
+
+**最后更新**：2026-01-22 21:30
