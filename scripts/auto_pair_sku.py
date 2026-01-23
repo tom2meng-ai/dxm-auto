@@ -1505,17 +1505,18 @@ class DianXiaoMiAutomation:
 
         Args:
             count: 要移除的数量
+
+        注意：移除最后一个而不是第一个，因为第一个是配对正确的产品
         """
         try:
-            logger.info(f"移除 {count} 个重复项...")
+            logger.info(f"移除 {count} 个重复项（从后往前移除）...")
 
             for i in range(count):
-                # 每次移除第一个（因为移除后索引会变）
-                # 或者从后往前移除
-                remove_link = self.page.get_by_role("link", name="移除").first
+                # 移除最后一个，保留第一个（配对正确的）
+                remove_link = self.page.get_by_role("link", name="移除").last
                 if remove_link.count() > 0:
                     remove_link.click()
-                    logger.info(f"  移除第 {i+1} 个")
+                    logger.info(f"  移除第 {i+1} 个（从后往前）")
                     self.page.wait_for_timeout(500)
                 else:
                     logger.warning(f"未找到移除链接，已移除 {i} 个")
@@ -1728,8 +1729,12 @@ class DianXiaoMiAutomation:
                 return products
 
             # 方法1: 尝试从产品区块中提取（每个产品是一个独立区块）
-            # 店小秘详情页中，每个产品通常在一个 .order-sku 或类似的容器中
-            product_blocks = detail_container.locator(".order-sku, .product-item, .sku-item, [class*='product'], [class*='sku-row']").all()
+            # 店小秘详情页中，每个产品通常在一个 .order-sku 容器中
+            # 注意：只使用 .order-sku 选择器，避免匹配太多元素
+            product_blocks = detail_container.locator(".order-sku").all()
+
+            # 用于去重的集合
+            seen_products = set()
 
             if product_blocks:
                 logger.info(f"找到 {len(product_blocks)} 个产品区块")
@@ -1755,6 +1760,13 @@ class DianXiaoMiAutomation:
                         # 单SKU场景的备用
                         if not name1:
                             name1 = self._extract_label_value_from_text(block_text, "Name Engraving")
+
+                        # 去重：相同 (sku, name1, name2) 组合只保留一个
+                        product_key = (sku, name1, name2)
+                        if product_key in seen_products:
+                            logger.debug(f"跳过重复产品: {sku}, {name1}, {name2}")
+                            continue
+                        seen_products.add(product_key)
 
                         # 提取数量（从 .order-sku__quantity 元素）
                         quantity = 1  # 默认数量为1
