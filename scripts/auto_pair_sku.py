@@ -785,59 +785,153 @@ class DianXiaoMiAutomation:
         return False
 
     def click_next_order(self) -> bool:
-        """点击下一个按钮"""
+        """点击下一个按钮
+
+        Returns:
+            True: 成功切换到下一个订单
+            False: 已经是最后一个订单，或无法切换
+        """
         logger.info("点击下一个按钮...")
         try:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
 
+            # 点击前先记录当前订单的SKU，用于后续判断是否真正切换了
+            current_sku_before = self._extract_platform_sku_from_detail()
+
             # 使用 getByRole 精确定位"下一个"按钮
             next_btn = self.page.get_by_role("button", name="下一个")
-            if next_btn.count() > 0:
-                next_btn.first.click(timeout=5000, force=True)  # 使用 force=True 避免被遮挡
-                self.page.wait_for_timeout(1500)
-                logger.info("切换到下一个订单")
-                return True
+            clicked = False
 
-            # 备用方案：尝试多种选择器
-            next_selectors = [
-                "button:has-text('下一个')",
-                "a:has-text('下一个')",
-                "span:has-text('下一个')",
-                "text=下一个"
+            if next_btn.count() > 0:
+                next_btn.first.click(timeout=5000, force=True)
+                clicked = True
+            else:
+                # 备用方案：尝试多种选择器
+                next_selectors = [
+                    "button:has-text('下一个')",
+                    "a:has-text('下一个')",
+                    "span:has-text('下一个')",
+                    "text=下一个"
+                ]
+
+                for selector in next_selectors:
+                    btn = self.page.locator(selector).first
+                    if btn.count() > 0:
+                        try:
+                            btn.click(timeout=3000, force=True)
+                            clicked = True
+                            break
+                        except Exception:
+                            continue
+
+            if not clicked:
+                # 备用方案：使用 JavaScript 点击
+                clicked = self.page.evaluate("""
+                    () => {
+                        const btns = document.querySelectorAll('button, a, span');
+                        for (const btn of btns) {
+                            if (btn.innerText && btn.innerText.includes('下一个')) {
+                                btn.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                """)
+
+            if not clicked:
+                logger.warning("未找到下一个按钮")
+                return False
+
+            # 等待页面响应
+            self.page.wait_for_timeout(1500)
+
+            # 检测是否出现"最后一个订单"的提示
+            if self._is_last_order():
+                logger.info("🏁 已经是最后一个订单，停止处理")
+                return False
+
+            # 检测订单是否真正切换了（SKU是否变化）
+            current_sku_after = self._extract_platform_sku_from_detail()
+            if current_sku_before and current_sku_after and current_sku_before == current_sku_after:
+                logger.info("🏁 订单未切换（SKU相同），可能已是最后一个")
+                return False
+
+            logger.info("切换到下一个订单")
+            return True
+
+        except Exception as e:
+            logger.error(f"点击下一个按钮失败: {e}")
+        return False
+
+    def _is_last_order(self) -> bool:
+        """检测是否已经是最后一个订单
+
+        Returns:
+            True: 是最后一个订单
+            False: 不是最后一个订单
+        """
+        try:
+            # 检测常见的"最后一个订单"提示文本
+            last_order_indicators = [
+                "最后一个",
+                "已经是最后",
+                "没有更多",
+                "无更多订单",
+                "已是最后",
+                "last order",
+                "no more"
             ]
 
-            for selector in next_selectors:
-                btn = self.page.locator(selector).first
-                if btn.count() > 0:
+            # 检测页面上是否出现提示信息（通常是 message 或 notification）
+            message_selectors = [
+                ".ant-message",
+                ".ant-notification",
+                ".el-message",
+                ".message",
+                ".toast",
+                ".ant-modal-body"
+            ]
+
+            for selector in message_selectors:
+                elements = self.page.locator(selector).all()
+                for el in elements:
                     try:
-                        btn.click(timeout=3000, force=True)
-                        self.page.wait_for_timeout(1500)
-                        logger.info("切换到下一个订单")
-                        return True
+                        if el.is_visible():
+                            text = el.inner_text().lower()
+                            for indicator in last_order_indicators:
+                                if indicator.lower() in text:
+                                    logger.debug(f"检测到最后一个订单提示: {text}")
+                                    return True
                     except Exception:
                         continue
 
-            # 备用方案：使用 JavaScript 点击
-            clicked = self.page.evaluate("""
-                () => {
-                    const btns = document.querySelectorAll('button, a, span');
-                    for (const btn of btns) {
-                        if (btn.innerText && btn.innerText.includes('下一个')) {
-                            btn.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-            """)
-            if clicked:
-                self.page.wait_for_timeout(1500)
-                logger.info("通过JS切换到下一个订单")
-                return True
+            # 备用：检查整个详情弹窗的文本
+            detail_container = self._get_detail_container()
+            if detail_container:
+                try:
+                    container_text = detail_container.inner_text().lower()
+                    for indicator in last_order_indicators:
+                        if indicator.lower() in container_text:
+                            logger.debug(f"在详情弹窗中检测到最后一个订单提示")
+                            return True
+                except Exception:
+                    pass
 
-            logger.warning("未找到下一个按钮")
+            # 检查"下一个"按钮是否被禁用
+            next_btn = self.page.get_by_role("button", name="下一个").first
+            if next_btn.count() > 0:
+                try:
+                    is_disabled = next_btn.is_disabled()
+                    if is_disabled:
+                        logger.debug("下一个按钮已禁用")
+                        return True
+                except Exception:
+                    pass
+
         except Exception as e:
-            logger.error(f"点击下一个按钮失败: {e}")
+            logger.debug(f"检测最后一个订单时出错: {e}")
+
         return False
 
     def _dismiss_overlays(self):
