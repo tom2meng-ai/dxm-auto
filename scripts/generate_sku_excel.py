@@ -222,30 +222,47 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     """
     处理订单文件
 
-    返回: (单个SKU DataFrame, 组合SKU DataFrame)
+    返回: (单个SKU DataFrame, 组合SKU DataFrame, 错误报告 DataFrame)
     """
     logger.info(f"读取输入文件: {input_file}")
 
     # 读取 Excel
     df = pd.read_excel(input_file)
-    logger.info(f"总行数: {len(df)}")
-
-    # 过滤 engraved 订单
-    df_engraved = df[df["SKU"].str.contains("engraved", case=False, na=False)]
-    logger.info(f"Engraved 订单数: {len(df_engraved)}")
-
-    if df_engraved.empty:
-        logger.warning("没有找到 engraved 订单")
-        return pd.DataFrame(), pd.DataFrame()
-
-    # 加载卡片对应表
-    card_mapping = load_card_mapping()
+    total_rows = len(df)
+    logger.info(f"输入文件总行数: {total_rows}")
 
     # 存储结果
     single_sku_rows = []
     combo_sku_rows = []
+    error_rows = []
 
-    # 处理每一行
+    # 加载卡片对应表
+    card_mapping = load_card_mapping()
+
+    # 统计非定制订单
+    df_non_engraved = df[~df["SKU"].str.contains("engraved", case=False, na=False)]
+    logger.info(f"非定制订单数: {len(df_non_engraved)}")
+
+    # 将非定制订单记录到错误报告
+    for idx, row in df_non_engraved.iterrows():
+        order_no = row.get("订单号", "")
+        platform_sku = row.get("SKU", "")
+        error_rows.append({
+            "订单号": order_no,
+            "平台SKU": platform_sku,
+            "错误原因": "非定制订单（不含engraved）"
+        })
+        logger.warning(f"非定制订单跳过: {order_no} - {platform_sku}")
+
+    # 过滤 engraved 订单
+    df_engraved = df[df["SKU"].str.contains("engraved", case=False, na=False)]
+    logger.info(f"定制订单数: {len(df_engraved)}")
+
+    if df_engraved.empty:
+        logger.warning("没有找到 engraved 订单")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(error_rows)
+
+    # 处理每一行定制订单
     for idx, row in df_engraved.iterrows():
         order_no = row.get("订单号", "")
         platform_sku = row.get("SKU", "")
@@ -258,10 +275,20 @@ def process_orders(input_file: str, date_str: str) -> tuple:
 
         if not sku_info:
             logger.warning(f"无法解析 SKU: {platform_sku}")
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误原因": "无法解析SKU格式"
+            })
             continue
 
         if not spec_info["name1"]:
             logger.warning(f"缺少 Name1: 订单 {order_no}")
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误原因": "缺少 Name1（客户姓名）"
+            })
             continue
 
         product_code = sku_info["product_code"]
@@ -365,8 +392,28 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     # 创建 DataFrame
     single_df = pd.DataFrame(single_sku_rows)
     combo_df = pd.DataFrame(combo_sku_rows)
+    error_df = pd.DataFrame(error_rows)
 
-    return single_df, combo_df
+    # 数量核对
+    success_count = len(single_df)
+    error_count = len(error_df)
+    total_check = success_count + error_count
+
+    logger.info("=" * 50)
+    logger.info("数量核对")
+    logger.info("=" * 50)
+    logger.info(f"输入文件总行数: {total_rows}")
+    logger.info(f"成功导出订单数: {success_count}")
+    logger.info(f"错误/跳过订单数: {error_count}")
+    logger.info(f"处理总数: {total_check}")
+
+    if total_check == total_rows:
+        logger.info("✅ 数量核对通过！所有订单都已处理")
+    else:
+        logger.error(f"❌ 数量核对失败！遗漏 {total_rows - total_check} 个订单")
+        logger.error("请检查是否有订单被意外跳过")
+
+    return single_df, combo_df, error_df
 
 
 def main():
@@ -401,34 +448,52 @@ def main():
     logger.info("=" * 50)
 
     # 处理订单
-    single_df, combo_df = process_orders(args.input_file, args.date)
-
-    if single_df.empty:
-        logger.error("没有生成任何数据")
-        sys.exit(1)
+    single_df, combo_df, error_df = process_orders(args.input_file, args.date)
 
     # 输出文件
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     single_output = output_dir / f"output_单个SKU_{timestamp}.xlsx"
     combo_output = output_dir / f"output_组合SKU_{timestamp}.xlsx"
+    error_output = output_dir / f"output_错误报告_{timestamp}.xlsx"
 
-    # 保存 Excel
-    single_df.to_excel(single_output, index=False)
-    combo_df.to_excel(combo_output, index=False)
+    # 保存单个 SKU Excel
+    if not single_df.empty:
+        single_df.to_excel(single_output, index=False)
+        logger.info(f"单个 SKU 文件已生成: {single_output} ({len(single_df)} 条)")
+    else:
+        logger.warning("没有生成任何单个 SKU 数据")
 
-    logger.info(f"单个 SKU 文件已生成: {single_output} ({len(single_df)} 条)")
-    logger.info(f"组合 SKU 文件已生成: {combo_output} ({len(combo_df)} 条)")
+    # 保存组合 SKU Excel
+    if not combo_df.empty:
+        combo_df.to_excel(combo_output, index=False)
+        logger.info(f"组合 SKU 文件已生成: {combo_output} ({len(combo_df)} 条)")
+    else:
+        logger.warning("没有生成任何组合 SKU 数据")
+
+    # 保存错误报告 Excel
+    if not error_df.empty:
+        error_df.to_excel(error_output, index=False)
+        logger.info(f"错误报告文件已生成: {error_output} ({len(error_df)} 条)")
+    else:
+        logger.info("没有错误订单")
+
     logger.info("处理完成!")
 
     # 打印统计
     print("\n" + "=" * 50)
     print("处理结果统计")
     print("=" * 50)
-    print(f"单个 SKU 数量: {len(single_df)}")
-    print(f"组合 SKU 数量: {len(combo_df)}")
-    print(f"输出文件:")
-    print(f"  - {single_output}")
-    print(f"  - {combo_output}")
+    print(f"✅ 成功导出订单数: {len(single_df)}")
+    print(f"❌ 错误/跳过订单数: {len(error_df)}")
+    print(f"📊 组合 SKU 行数: {len(combo_df)}")
+    print(f"\n输出文件:")
+    if not single_df.empty:
+        print(f"  - {single_output}")
+    if not combo_df.empty:
+        print(f"  - {combo_output}")
+    if not error_df.empty:
+        print(f"  - {error_output}")
+    print("=" * 50)
 
 
 if __name__ == "__main__":

@@ -149,6 +149,24 @@ def generate_single_sku(product_code: str, date_str: str, name1: str, name2: str
     return f"{STORE_NAME}-{product_code}-{date_str}-{names}"
 
 
+def generate_combo_sku(single_sku: str, card_code: str, box_type: str) -> str:
+    """生成组合 SKU
+
+    格式: {单个SKU}-{卡片代码}-{盒子类型简写}
+    示例: Michael-J20-0121-Xaviar+Suzi-D17-WH
+
+    Args:
+        single_sku: 单个SKU（如 Michael-J20-0121-Xaviar+Suzi）
+        card_code: 卡片代码（如 D17, MAN10）
+        box_type: 盒子类型（whitebox 或 ledbox）
+
+    Returns:
+        组合SKU字符串
+    """
+    box_short = "LED" if "led" in box_type.lower() else "WH"
+    return f"{single_sku}-{card_code}-{box_short}"
+
+
 class DianXiaoMiAutomation:
     """店小秘自动化操作类"""
 
@@ -1124,22 +1142,34 @@ class DianXiaoMiAutomation:
 
             # 生成新 SKU
             if sku_info:
-                new_sku = generate_single_sku(
+                # 先生成单个SKU
+                single_sku = generate_single_sku(
                     sku_info["product_code"],
                     date_str,
                     name1,
                     name2
                 )
-                logger.info(f"生成 SKU: {new_sku}")
 
-                # 搜索并配对
-                if self.search_and_select_sku(new_sku):
-                    logger.info("SKU 配对成功")
+                # 再生成组合SKU
+                combo_sku = generate_combo_sku(
+                    single_sku,
+                    sku_info["card_code"],
+                    sku_info["box_type"]
+                )
+
+                logger.info(f"生成单个 SKU: {single_sku}")
+                logger.info(f"生成组合 SKU: {combo_sku}")
+
+                # 只使用组合SKU进行配对（不降级）
+                logger.info("尝试配对组合 SKU...")
+                if self.search_and_select_sku(combo_sku):
+                    logger.info("✅ 组合 SKU 配对成功")
                     self.page.wait_for_timeout(1000)
                     # 注意：不自动点击审核，让用户手动审核
                     return True
                 else:
-                    logger.warning("SKU 配对失败")
+                    logger.error("❌ 组合 SKU 配对失败 - 请检查店小秘系统中是否存在该组合SKU")
+                    logger.error(f"   未找到的组合SKU: {combo_sku}")
                     return False
             else:
                 logger.warning("无法解析 SKU 信息")

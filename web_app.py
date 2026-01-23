@@ -310,22 +310,49 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
     """
     # 保存原始完整DataFrame（用于查找图片URL）
     df_original = df.copy()
+    total_rows = len(df)
 
-    # 过滤 engraved 订单
-    df_engraved = df[df["SKU"].str.contains("engraved", case=False, na=False)]
-
-    if df_engraved.empty:
-        return pd.DataFrame(), pd.DataFrame(), [], pd.DataFrame()
-
+    # 存储结果
     card_mapping = load_card_mapping()
     single_sku_rows = []
     combo_sku_rows = []
     logs = []
-    error_rows = []  # 新增：错误记录
+    error_rows = []
 
-    # 新增：唯一性检测器
+    # 唯一性检测器
     sku_counter = {}  # SKU重复检测
     identifier_set = set()  # 识别码重复检测
+
+    # 处理非定制订单（记录到错误报告）
+    df_non_engraved = df[~df["SKU"].str.contains("engraved", case=False, na=False)]
+    logs.append(f"📊 输入文件总行数: {total_rows}")
+    logs.append(f"📊 非定制订单数: {len(df_non_engraved)}")
+
+    for idx, row in df_non_engraved.iterrows():
+        order_no = row.get("订单号", "")
+        platform_sku = row.get("SKU", "")
+        error_rows.append({
+            "订单号": order_no,
+            "平台SKU": platform_sku,
+            "错误类型": "非定制订单",
+            "错误详情": "该订单不包含 engraved 关键词，属于非定制订单",
+            "产品规格": "",
+            "Name1": "",
+            "Name2": "",
+            "解析出的产品编号": "",
+            "解析出的卡片代码": "",
+            "卡片置信度": "",
+            "建议操作": "非定制订单无需处理SKU"
+        })
+        logs.append(f"⚠️ 非定制订单跳过: {order_no} - {platform_sku}")
+
+    # 过滤 engraved 订单
+    df_engraved = df[df["SKU"].str.contains("engraved", case=False, na=False)]
+    logs.append(f"📊 定制订单数: {len(df_engraved)}")
+
+    if df_engraved.empty:
+        logs.append("⚠️ 没有找到定制订单")
+        return pd.DataFrame(), pd.DataFrame(), logs, pd.DataFrame(error_rows)
 
     for idx, row in df_engraved.iterrows():
         order_no = row.get("订单号", "")
