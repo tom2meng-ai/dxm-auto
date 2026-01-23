@@ -98,12 +98,68 @@ def save_progress(progress: dict):
         json.dump(progress, f, ensure_ascii=False, indent=2)
 
 
+def extract_card_code_smart(parts: list, known_cards: set) -> tuple:
+    """智能提取卡片代码
+
+    Args:
+        parts: SKU 分割后的各部分
+        known_cards: 已知卡片代码集合
+
+    Returns:
+        (card_code, confidence, message)
+    """
+    # 黑名单：颜色代码和无意义字符
+    NOISE_CHARS = {"X", "SM", "SB", "B", "G", "S", "R", "L"}
+    BOX_KEYWORDS = {"whitebox", "ledbox", "led"}
+
+    # 找到 engraved 的位置
+    engraved_idx = -1
+    box_idx = len(parts)
+
+    for i, part in enumerate(parts):
+        part_lower = part.lower()
+        if part_lower == "engraved":
+            engraved_idx = i
+        # 修复：使用 startswith 匹配盒子类型
+        if any(part_lower.startswith(kw) for kw in BOX_KEYWORDS):
+            box_idx = i
+            break
+
+    if engraved_idx == -1:
+        return "", "low", "未找到 engraved 关键词"
+
+    # 候选区域：engraved 之后、盒子类型之前
+    candidates = parts[engraved_idx + 1:box_idx]
+
+    if not candidates:
+        return "", "low", "engraved 后没有候选卡片代码"
+
+    # 优先级 1: 匹配已知卡片代码
+    for candidate in candidates:
+        if candidate in known_cards:
+            return candidate, "high", f"匹配已知卡片代码: {candidate}"
+
+    # 优先级 2: 过滤噪音，选择最可能的（长度>=2且不是颜色/尺寸代码）
+    filtered = [c for c in candidates if c.upper() not in NOISE_CHARS and len(c) >= 2]
+
+    if filtered:
+        return filtered[0], "medium", f"基于规则提取: {filtered[0]}"
+
+    # 优先级 3: 兜底
+    for candidate in candidates:
+        if candidate.upper() not in NOISE_CHARS:
+            return candidate, "low", f"兜底提取: {candidate}"
+
+    return "", "low", "无法提取卡片代码"
+
+
 def parse_platform_sku(sku: str) -> Optional[dict]:
     """解析平台 SKU
 
-    支持两种格式：
-    - 有颜色: B03-B-engraved-MAN10-whitebox
-    - 无颜色: B03-engraved-MAN10-whitebox
+    支持多种格式：
+    - 标准: B09-B-engraved-MAN10-whitebox
+    - 带尺寸: B09-L-B-Engraved-MAN10-whiteboxx1
+    - LED盒: B09-B-Engraved-MAN10-LEDx1
     """
     if not sku or not isinstance(sku, str):
         return None
@@ -111,6 +167,10 @@ def parse_platform_sku(sku: str) -> Optional[dict]:
     parts = sku.split("-")
     if len(parts) < 3:
         return None
+
+    # 加载已知卡片代码
+    card_mapping = load_card_mapping()
+    known_cards = set(card_mapping.keys())
 
     result = {
         "product_code": parts[0],
@@ -121,24 +181,28 @@ def parse_platform_sku(sku: str) -> Optional[dict]:
         "original_sku": sku
     }
 
-    # 智能检测第二部分是颜色还是其他内容
-    # 颜色代码通常是单个字母（B, G, S, X 等）
-    if len(parts[1]) == 1 and parts[1].isalpha():
-        result["color"] = parts[1]
-        remaining_parts = parts[2:]
-    else:
-        # 无颜色格式，第二部分直接是 engraved 或其他
-        result["color"] = ""
-        remaining_parts = parts[1:]
-
-    for part in remaining_parts:
+    # 识别 engraved 和 box_type
+    for part in parts:
         part_lower = part.lower()
         if part_lower == "engraved":
             result["custom_type"] = "engraved"
-        elif part_lower in ("whitebox", "ledbox", "led"):
-            result["box_type"] = "ledbox" if "led" in part_lower else "whitebox"
-        elif not result["card_code"] and part_lower not in ("whitebox", "ledbox", "led", "engraved"):
-            result["card_code"] = part
+        # 修复：使用 startswith 匹配盒子类型（处理 LEDx1, whiteboxx1 等）
+        elif part_lower.startswith("led"):
+            result["box_type"] = "ledbox"
+        elif part_lower.startswith("whitebox"):
+            result["box_type"] = "whitebox"
+
+    # 使用智能提取卡片代码
+    card_code, confidence, message = extract_card_code_smart(parts, known_cards)
+    result["card_code"] = card_code
+
+    # 提取颜色（在 engraved 之前的单字母）
+    for i, part in enumerate(parts[1:], 1):
+        if part.lower() == "engraved":
+            break
+        if len(part) == 1 and part.isalpha() and part.upper() in ("B", "G", "S", "R"):
+            result["color"] = part
+            break
 
     return result
 
