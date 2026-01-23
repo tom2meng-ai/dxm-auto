@@ -290,7 +290,7 @@ def get_image_url_for_order(df: pd.DataFrame, order_no: str, current_url: str) -
     order_rows = df[df["订单号"] == order_no]
 
     for idx, row in order_rows.iterrows():
-        url = row.get("商品图片网址", "")
+        url = row.get("产品图片网址", "")  # 更新：使用产品图片网址
         if url and str(url) != 'nan' and str(url).strip():
             return url
 
@@ -331,7 +331,7 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
         order_no = row.get("订单号", "")
         platform_sku = row.get("SKU", "")
         product_spec = row.get("产品规格", "")
-        image_url_current = row.get("商品图片网址", "")
+        image_url_current = row.get("产品图片网址", "")  # 更新：使用产品图片网址
 
         # 智能获取图片URL
         image_url = get_image_url_for_order(df_original, order_no, image_url_current)
@@ -470,7 +470,7 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
         combo_main_row = {
             "*组合sku": combo_sku,
             "平台SKU": "",
-            "识别码": identifier,
+            "识别码": f"{identifier}-GROUP",  # 组合SKU识别码加上-GROUP后缀
             "中文名称": f"{get_chinese_name(product_code, color, name1, name2)}-{card_code}",
             "英文名称": "",
             "分类ID": DEFAULT_CATEGORY_ID,

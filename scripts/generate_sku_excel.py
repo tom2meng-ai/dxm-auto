@@ -250,6 +250,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         order_no = row.get("订单号", "")
         platform_sku = row.get("SKU", "")
         product_spec = row.get("产品规格", "")
+        product_image_url = row.get("产品图片网址", "")  # 新增：读取产品图片网址
 
         # 解析数据
         sku_info = parse_platform_sku(platform_sku)
@@ -285,7 +286,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
             "中文名称": get_chinese_name(product_code, color, name1, name2),
             "英文名称": "",
             "分类ID": DEFAULT_CATEGORY_ID,
-            "图片URL\n（必须以http://或https：//开头）": "",
+            "图片URL\n（必须以http://或https：//开头）": product_image_url,  # 使用产品图片网址
             "商品净重\n（g）": DEFAULT_WEIGHT,
             "采购参考价\n（RMB）": DEFAULT_PURCHASE_PRICE,
             "采购员\n（输入子账号姓名或名称）": DEFAULT_PURCHASER,
@@ -313,7 +314,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         combo_main_row = {
             "*组合sku": combo_sku,
             "平台SKU": platform_sku,
-            "识别码": order_no,
+            "识别码": f"{order_no}-GROUP",  # 组合SKU识别码加上-GROUP后缀
             "中文名称": f"{get_chinese_name(product_code, color, name1, name2)}-{card_code}",
             "英文名称": "",
             "分类ID": DEFAULT_CATEGORY_ID,
