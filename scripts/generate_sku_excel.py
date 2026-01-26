@@ -13,15 +13,36 @@
 """
 
 import argparse
-import json
 import logging
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
+
+# 从共享模块导入
+from sku_utils import (
+    PROJECT_ROOT,
+    STORE_NAME,
+    RED_BOX_SKU,
+    DEFAULT_CATEGORY_ID,
+    DEFAULT_WEIGHT,
+    DEFAULT_PURCHASE_PRICE,
+    DEFAULT_DECLARE_AMOUNT,
+    DEFAULT_PURCHASER,
+    DEFAULT_DEVELOPER,
+    DEFAULT_SALES_TYPE,
+    COLOR_MAP,
+    PRODUCT_NAME_MAP,
+    load_card_mapping,
+    parse_platform_sku,
+    parse_product_spec,
+    generate_single_sku,
+    generate_combo_sku,
+    get_chinese_name,
+    get_declare_names,
+    validate_excel_columns,
+)
 
 # 配置日志
 logging.basicConfig(
@@ -33,189 +54,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent
-
-# 常量配置
-STORE_NAME = "Michael"
-RED_BOX_SKU = "Michael-RED BOX"
-DEFAULT_CATEGORY_ID = "1422034"
-DEFAULT_WEIGHT = 60
-DEFAULT_PURCHASE_PRICE = 1
-DEFAULT_DECLARE_AMOUNT = 12
-DEFAULT_PURCHASER = "露露"
-DEFAULT_DEVELOPER = "露露"
-DEFAULT_SALES_TYPE = "售卖品"
-
-# 颜色映射
-COLOR_MAP = {
-    "G": "金色",
-    "S": "银色",
-    "B": "黑色",
-    "R": "玫瑰金",
-}
-
-# 产品编号到中文名称的映射（可扩展）
-PRODUCT_NAME_MAP = {
-    "J20": "爱心双扣项链",
-    "J02": "环环相扣项链",
-    "J01": "镂空镶钻爱心手链",
-    "B09": "不锈钢皮革手链",
-    # 更多产品待添加
-}
-
-# 产品类型到报关名的映射
-DECLARE_NAME_MAP = {
-    "J": {"en": "Necklace", "cn": "项链"},  # J开头是项链
-    "B": {"en": "Bracelet", "cn": "手链"},  # B开头是手链
-}
-
-
-def load_card_mapping() -> dict:
-    """加载卡片对应表"""
-    config_path = PROJECT_ROOT / "config" / "card_mapping.json"
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            mapping = json.load(f)
-            # 移除注释字段
-            mapping.pop("_comment", None)
-            return mapping
-    except FileNotFoundError:
-        logger.warning(f"卡片对应表未找到: {config_path}")
-        return {}
-    except json.JSONDecodeError as e:
-        logger.error(f"卡片对应表格式错误: {e}")
-        return {}
-
-
-def parse_platform_sku(sku: str) -> Optional[dict]:
-    """
-    解析平台 SKU
-
-    示例: J20-G-engraved-D17-whitebox
-    返回: {
-        'product_code': 'J20',
-        'color': 'G',
-        'custom_type': 'engraved',
-        'card_code': 'D17',
-        'box_type': 'whitebox'
-    }
-    """
-    if not sku or not isinstance(sku, str):
-        return None
-
-    # 标准格式: {产品编号}-{颜色}-{定制类型}-{卡片代码}-{盒子类型}
-    # 但有些SKU可能格式不同，需要灵活处理
-    parts = sku.split("-")
-
-    if len(parts) < 3:
-        return None
-
-    result = {
-        "product_code": parts[0],
-        "color": parts[1] if len(parts) > 1 else "",
-        "custom_type": "",
-        "card_code": "",
-        "box_type": "whitebox",  # 默认白盒
-        "original_sku": sku
-    }
-
-    # 查找 engraved 和盒子类型
-    for i, part in enumerate(parts[2:], start=2):
-        part_lower = part.lower()
-        if part_lower == "engraved":
-            result["custom_type"] = "engraved"
-        elif part_lower in ("whitebox", "ledbox", "led"):
-            result["box_type"] = "ledbox" if "led" in part_lower else "whitebox"
-        elif i == len(parts) - 2 and result["custom_type"]:
-            # engraved 后面的是卡片代码
-            result["card_code"] = part
-        elif not result["card_code"] and part_lower not in ("whitebox", "ledbox", "led"):
-            # 可能是卡片代码
-            result["card_code"] = part
-
-    return result
-
-
-def parse_product_spec(spec: str) -> dict:
-    """
-    解析产品规格
-
-    示例:
-        Variants:Gold
-        Name 1:Xaviar
-        Name 2:Suzi
-        _cl_options:cljhgyefn2ay
-
-    返回: {'variants': 'Gold', 'name1': 'Xaviar', 'name2': 'Suzi'}
-    """
-    result = {
-        "variants": "",
-        "name1": "",
-        "name2": "",
-        "name3": "",
-    }
-
-    if not spec or not isinstance(spec, str):
-        return result
-
-    # 按行解析
-    for line in spec.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip().lower()
-            value = value.strip()
-
-            if key == "variants":
-                result["variants"] = value
-            elif key == "name 1":
-                result["name1"] = value
-            elif key == "name 2":
-                result["name2"] = value
-            elif key == "name 3":
-                result["name3"] = value
-
-    return result
-
-
-def generate_single_sku(product_code: str, date_str: str, name1: str, name2: str) -> str:
-    """
-    生成单个 SKU
-
-    格式: Michael-{产品编号}-{MMDD}-{Name1}+{Name2}
-    示例: Michael-J20-0121-Xaviar+Suzi
-    """
-    names = f"{name1}+{name2}" if name2 else name1
-    return f"{STORE_NAME}-{product_code}-{date_str}-{names}"
-
-
-def generate_combo_sku(single_sku: str, card_code: str, box_type: str) -> str:
-    """
-    生成组合 SKU
-
-    格式: {单个SKU}-{卡片代码}-{盒子类型简写}
-    示例: Michael-J20-0121-Xaviar+Suzi-D17-WH
-    """
-    box_short = "LED" if "led" in box_type.lower() else "WH"
-    return f"{single_sku}-{card_code}-{box_short}"
-
-
-def get_chinese_name(product_code: str, color: str, name1: str, name2: str) -> str:
-    """生成中文名称"""
-    product_name = PRODUCT_NAME_MAP.get(product_code, product_code)
-    color_cn = COLOR_MAP.get(color.upper(), color)
-    names = f"{name1}+{name2}" if name2 else name1
-    return f"{STORE_NAME}-{product_name}-{color_cn}-{names}"
-
-
-def get_declare_names(product_code: str) -> tuple:
-    """获取报关名称（英文，中文）"""
-    prefix = product_code[0].upper() if product_code else ""
-    if prefix in DECLARE_NAME_MAP:
-        return DECLARE_NAME_MAP[prefix]["en"], DECLARE_NAME_MAP[prefix]["cn"]
-    return "Jewelry", "饰品"
 
 
 def process_orders(input_file: str, date_str: str) -> tuple:
@@ -230,6 +68,12 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     df = pd.read_excel(input_file)
     total_rows = len(df)
     logger.info(f"输入文件总行数: {total_rows}")
+
+    # 校验必填列
+    is_valid, missing_cols, error_msg = validate_excel_columns(df)
+    if not is_valid:
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
     # 存储结果
     single_sku_rows = []
@@ -269,8 +113,8 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         product_spec = row.get("产品规格", "")
         product_image_url = row.get("产品图片网址", "")  # 新增：读取产品图片网址
 
-        # 解析数据
-        sku_info = parse_platform_sku(platform_sku)
+        # 解析数据（传入已加载的 card_mapping 避免重复读取文件）
+        sku_info = parse_platform_sku(platform_sku, card_mapping)
         spec_info = parse_product_spec(product_spec)
 
         if not sku_info:
