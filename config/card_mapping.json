@@ -1,8 +1,8 @@
 {
-  "_comment": "卡片代码对应表 - 从 card-sku-match.md 提取并更新",
+  "_comment": "卡片代码对应表 - 从 card-sku-match.md 提取并更新 (2026-01-26)",
 
   "DAD5": "Michael-BEST DAD card",
-  "DAD6": "Michael DAD6(new)-white card",
+  "DAD6": "Michael-To My Dad CARD1",
 
   "Wife": "Michael-To My Wife Card-Wife",
 
@@ -36,18 +36,22 @@
 
   "MAN4": "Michael-To My Man Crown CARD",
   "MAN7": "Michael-TO MY HUSBAND Card",
-  "MAN10": "Michael- To My Man Card",
+  "MAN10": "Michael-To My Man CARD4",
   "MAN11": "Michael-TO MY HUSBAND CARD1",
 
+  "Son8": "Michael-To My SON Card",
   "SON6": "Michael-Son Forever Card",
   "SON12": "Michael-DEAR SON CARD",
 
+  "GDTR10": "Michael-Knot Ring Granddaughter CARD",
   "GDTR17": "Michael-Infinity Heart card-Granddaughter",
   "GDTR18": "Michael-To My Granddaughter CARD GDTR18",
   "GDTR19": "Michael-To My Granddaughter CARD GDTR18",
 
+  "GS4": "Michael-Together Braided Bracelet-Card 2",
   "GS5": "Michael-To My Grandson CARD",
   "GS7": "Michael-I LOVE YOU Card",
 
-  "B25": "Michael-BEST DAD card"
+  "SS2": "Michael-To My Sister CARD",
+  "S-sister": "Michael-To My Sister Card1"
 }
