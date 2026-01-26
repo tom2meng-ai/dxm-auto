@@ -1800,10 +1800,14 @@ def main():
         print("- 直接回车: 处理全部未配对订单")
         stop_order_no = input("\n截止订单号: ").strip()
 
+        # 确定最大处理数量
         if stop_order_no:
+            # 指定了截止订单号时，设置足够大的处理数量
+            max_orders = 500
             print(f"\n✅ 将处理到订单 {stop_order_no} 为止（包含该订单）")
         else:
-            print(f"\n✅ 将处理全部未配对订单（最多 {args.max_orders} 个）")
+            max_orders = args.max_orders
+            print(f"\n✅ 将处理全部未配对订单（最多 {max_orders} 个）")
 
         print("\n开始执行...\n")
 
@@ -1813,7 +1817,7 @@ def main():
             slow_mo=config["browser"].get("slow_mo", 100)
         )
         automation.run_pairing(
-            max_orders=args.max_orders,
+            max_orders=max_orders,
             date_str=args.date,
             stop_order_no=stop_order_no if stop_order_no else None
         )
