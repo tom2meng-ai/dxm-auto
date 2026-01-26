@@ -795,9 +795,6 @@ class DianXiaoMiAutomation:
         try:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
 
-            # 点击前先记录当前订单的SKU，用于后续判断是否真正切换了
-            current_sku_before = self._extract_platform_sku_from_detail()
-
             # 使用 getByRole 精确定位"下一个"按钮
             next_btn = self.page.get_by_role("button", name="下一个")
             clicked = False
@@ -846,15 +843,9 @@ class DianXiaoMiAutomation:
             # 等待页面响应
             self.page.wait_for_timeout(1500)
 
-            # 检测是否出现"最后一个订单"的提示
+            # 检测是否出现"最后一个订单"的提示（依赖店小秘的实际提示）
             if self._is_last_order():
                 logger.info("🏁 已经是最后一个订单，停止处理")
-                return False
-
-            # 检测订单是否真正切换了（SKU是否变化）
-            current_sku_after = self._extract_platform_sku_from_detail()
-            if current_sku_before and current_sku_after and current_sku_before == current_sku_after:
-                logger.info("🏁 订单未切换（SKU相同），可能已是最后一个")
                 return False
 
             logger.info("切换到下一个订单")
