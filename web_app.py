@@ -49,6 +49,8 @@ from sku_utils import (
     get_chinese_name,
     get_declare_names,
     validate_excel_columns,
+    validate_name_format,
+    validate_name2_required,
 )
 
 app = Flask(__name__, template_folder='templates')
@@ -195,6 +197,102 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
                 "建议操作": "请确认产品规格中是否包含客户名字"
             })
             logs.append(f"⚠️ 缺少 Name1: 订单 {order_no}")
+            continue
+
+        # 验证 name1 格式（只允许英文字母和数字）
+        is_valid_name1, invalid_chars1 = validate_name_format(spec_info["name1"])
+        if not is_valid_name1:
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误类型": "名字格式无效",
+                "错误详情": f"Name1 '{spec_info['name1']}' 包含无效字符: {invalid_chars1}",
+                "产品规格": product_spec,
+                "Name1": spec_info["name1"],
+                "Name2": spec_info.get("name2", ""),
+                "解析出的产品编号": sku_info.get("product_code", ""),
+                "解析出的卡片代码": sku_info.get("card_code", ""),
+                "卡片置信度": sku_info.get("card_confidence", ""),
+                "建议操作": "请修正客户名字，只允许英文字母和数字"
+            })
+            logs.append(f"⚠️ 名字格式无效: 订单 {order_no} - Name1 含非法字符 {invalid_chars1}")
+            continue
+
+        # 验证 name2 格式（如果有值）
+        if spec_info["name2"]:
+            is_valid_name2, invalid_chars2 = validate_name_format(spec_info["name2"])
+            if not is_valid_name2:
+                error_rows.append({
+                    "订单号": order_no,
+                    "平台SKU": platform_sku,
+                    "错误类型": "名字格式无效",
+                    "错误详情": f"Name2 '{spec_info['name2']}' 包含无效字符: {invalid_chars2}",
+                    "产品规格": product_spec,
+                    "Name1": spec_info["name1"],
+                    "Name2": spec_info["name2"],
+                    "解析出的产品编号": sku_info.get("product_code", ""),
+                    "解析出的卡片代码": sku_info.get("card_code", ""),
+                    "卡片置信度": sku_info.get("card_confidence", ""),
+                    "建议操作": "请修正客户名字，只允许英文字母和数字"
+                })
+                logs.append(f"⚠️ 名字格式无效: 订单 {order_no} - Name2 含非法字符 {invalid_chars2}")
+                continue
+
+        # 验证 name3-name6 格式（如果有值）
+        for name_key in ["name3", "name4", "name5", "name6"]:
+            name_value = spec_info.get(name_key, "")
+            if name_value:
+                is_valid, invalid_chars = validate_name_format(name_value)
+                if not is_valid:
+                    error_rows.append({
+                        "订单号": order_no,
+                        "平台SKU": platform_sku,
+                        "错误类型": "名字格式无效",
+                        "错误详情": f"{name_key.upper()} '{name_value}' 包含无效字符: {invalid_chars}",
+                        "产品规格": product_spec,
+                        "Name1": spec_info["name1"],
+                        "Name2": spec_info.get("name2", ""),
+                        "解析出的产品编号": sku_info.get("product_code", ""),
+                        "解析出的卡片代码": sku_info.get("card_code", ""),
+                        "卡片置信度": sku_info.get("card_confidence", ""),
+                        "建议操作": "请修正客户名字，只允许英文字母和数字"
+                    })
+                    logs.append(f"⚠️ 名字格式无效: 订单 {order_no} - {name_key.upper()} 含非法字符 {invalid_chars}")
+                    break  # 跳出循环，继续处理下一个订单
+        else:
+            # 只有当 for 循环正常结束（没有 break）时才继续
+            pass
+
+        # 检查是否因 name3-6 验证失败而需要跳过
+        # 使用一个标志来判断
+        name_valid = True
+        for name_key in ["name3", "name4", "name5", "name6"]:
+            name_value = spec_info.get(name_key, "")
+            if name_value:
+                is_valid, _ = validate_name_format(name_value)
+                if not is_valid:
+                    name_valid = False
+                    break
+        if not name_valid:
+            continue
+
+        # 验证双名字格式时 Name2 不能为空
+        is_name2_valid, name2_error = validate_name2_required(spec_info)
+        if not is_name2_valid:
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误类型": "Name2为空",
+                "错误详情": name2_error,
+                "产品规格": product_spec,
+                "Name1": spec_info["name1"],
+                "Name2": "",
+                "解析出的产品编号": sku_info.get("product_code", ""),
+                "解析出的卡片代码": sku_info.get("card_code", ""),
+                "卡片置信度": sku_info.get("card_confidence", ""),
+                "建议操作": "请补充 Name 2 信息"
+            })
+            logs.append(f"⚠️ Name2为空: 订单 {order_no} 使用双名字格式但缺少 Name2")
             continue
 
         product_code = sku_info["product_code"]

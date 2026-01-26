@@ -42,6 +42,8 @@ from sku_utils import (
     get_chinese_name,
     get_declare_names,
     validate_excel_columns,
+    validate_name_format,
+    validate_name2_required,
 )
 
 # 配置日志
@@ -132,6 +134,58 @@ def process_orders(input_file: str, date_str: str) -> tuple:
                 "订单号": order_no,
                 "平台SKU": platform_sku,
                 "错误原因": "缺少 Name1（客户姓名）"
+            })
+            continue
+
+        # 验证 name1 格式（只允许英文字母和数字）
+        is_valid_name1, invalid_chars1 = validate_name_format(spec_info["name1"])
+        if not is_valid_name1:
+            logger.warning(f"名字格式无效: 订单 {order_no} - Name1 含非法字符 {invalid_chars1}")
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误原因": f"Name1 '{spec_info['name1']}' 包含无效字符: {invalid_chars1}，只允许英文字母和数字"
+            })
+            continue
+
+        # 验证 name2 格式（如果有值）
+        if spec_info["name2"]:
+            is_valid_name2, invalid_chars2 = validate_name_format(spec_info["name2"])
+            if not is_valid_name2:
+                logger.warning(f"名字格式无效: 订单 {order_no} - Name2 含非法字符 {invalid_chars2}")
+                error_rows.append({
+                    "订单号": order_no,
+                    "平台SKU": platform_sku,
+                    "错误原因": f"Name2 '{spec_info['name2']}' 包含无效字符: {invalid_chars2}，只允许英文字母和数字"
+                })
+                continue
+
+        # 验证 name3-name6 格式（如果有值）
+        name_valid = True
+        for name_key in ["name3", "name4", "name5", "name6"]:
+            name_value = spec_info.get(name_key, "")
+            if name_value:
+                is_valid, invalid_chars = validate_name_format(name_value)
+                if not is_valid:
+                    logger.warning(f"名字格式无效: 订单 {order_no} - {name_key.upper()} 含非法字符 {invalid_chars}")
+                    error_rows.append({
+                        "订单号": order_no,
+                        "平台SKU": platform_sku,
+                        "错误原因": f"{name_key.upper()} '{name_value}' 包含无效字符: {invalid_chars}，只允许英文字母和数字"
+                    })
+                    name_valid = False
+                    break
+        if not name_valid:
+            continue
+
+        # 验证双名字格式时 Name2 不能为空
+        is_name2_valid, name2_error = validate_name2_required(spec_info)
+        if not is_name2_valid:
+            logger.warning(f"Name2为空: 订单 {order_no} 使用双名字格式但缺少 Name2")
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误原因": name2_error
             })
             continue
 

@@ -6,6 +6,7 @@ SKU 工具模块 - 共享逻辑
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -204,13 +205,17 @@ def parse_product_spec(spec: str) -> dict:
         _cl_options:cljhgyefn2ay
 
     Returns:
-        {'variants': 'Gold', 'name1': 'Xaviar', 'name2': 'Suzi', 'name3': ''}
+        {'variants': 'Gold', 'name1': 'Xaviar', 'name2': 'Suzi', 'name3': '', 'has_dual_name_format': True}
     """
     result = {
         "variants": "",
         "name1": "",
         "name2": "",
         "name3": "",
+        "name4": "",
+        "name5": "",
+        "name6": "",
+        "has_dual_name_format": False,  # 是否使用双名字格式(Name 1/Name 2)
     }
 
     if not spec or not isinstance(spec, str):
@@ -227,15 +232,59 @@ def parse_product_spec(spec: str) -> dict:
                 result["variants"] = value
             elif key == "name 1":
                 result["name1"] = value
+                result["has_dual_name_format"] = True  # 标记为双名字格式
             elif key == "name 2":
                 result["name2"] = value
+                result["has_dual_name_format"] = True  # 标记为双名字格式
             elif key == "name 3":
                 result["name3"] = value
+            elif key == "name 4":
+                result["name4"] = value
+            elif key == "name 5":
+                result["name5"] = value
+            elif key == "name 6":
+                result["name6"] = value
             elif key == "name engraving":
                 # 单个名字的情况
                 result["name1"] = value
 
     return result
+
+
+def validate_name_format(name: str) -> tuple:
+    """验证名字只包含英文字母和数字
+
+    Args:
+        name: 要验证的名字
+
+    Returns:
+        (is_valid, invalid_chars) - 是否有效，无效字符集合
+    """
+    if not name:
+        return True, set()
+
+    # 只允许 a-z, A-Z, 0-9
+    if re.match(r'^[a-zA-Z0-9]+$', name):
+        return True, set()
+
+    # 找出无效字符
+    invalid_chars = {c for c in name if not c.isalnum() or ord(c) > 127}
+    return False, invalid_chars
+
+
+def validate_name2_required(spec_info: dict) -> tuple:
+    """检查双名字格式时 Name2 是否为空
+
+    Args:
+        spec_info: parse_product_spec() 的返回结果
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if spec_info.get("has_dual_name_format", False):
+        if not spec_info.get("name2", "").strip():
+            return False, "订单使用双名字格式(Name 1/Name 2)，但 Name 2 为空"
+    return True, ""
 
 
 def generate_single_sku(product_code: str, date_str: str, name1: str, name2: str = "") -> str:
