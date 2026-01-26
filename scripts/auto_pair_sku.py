@@ -1546,8 +1546,6 @@ class DianXiaoMiAutomation:
     def _extract_order_no_from_detail(self) -> str:
         """从订单详情弹窗中提取平台订单号（如 5261219-59178）"""
         try:
-            self.page.wait_for_timeout(300)
-
             detail_container = self._get_detail_container()
             if not detail_container:
                 return ""
@@ -1645,14 +1643,15 @@ class DianXiaoMiAutomation:
                 logger.info(f"处理进度: {i + 1}/{max_orders}")
                 logger.info(f"{'='*30}")
 
-                # 提取当前订单的平台订单号
-                current_order_no = self._extract_order_no_from_detail()
-                if current_order_no:
-                    logger.info(f"当前平台订单号: {current_order_no}")
+                # 只在指定了截止订单号时才提取当前订单号（性能优化）
+                current_order_no = ""
+                if stop_order_no:
+                    current_order_no = self._extract_order_no_from_detail()
+                    if current_order_no:
+                        logger.info(f"当前平台订单号: {current_order_no}")
 
-                # 检查是否到达截止订单
-                if stop_order_no and current_order_no:
-                    if stop_order_no in current_order_no or current_order_no in stop_order_no:
+                    # 检查是否到达截止订单
+                    if current_order_no and (stop_order_no in current_order_no or current_order_no in stop_order_no):
                         logger.info(f"🏁 到达截止订单: {current_order_no}")
                         reached_stop_order = True
 
