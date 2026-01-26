@@ -1172,26 +1172,10 @@ class DianXiaoMiAutomation:
             logger.debug(f"关闭配对弹窗失败: {e}")
 
     def process_current_order_in_detail(self, date_str: str) -> bool:
-        """处理当前在详情弹窗中显示的订单"""
+        """处理当前在详情弹窗中显示的订单（支持多SKU）"""
         try:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
-            # 优化：减少等待，之前是 1000ms
             self.page.wait_for_timeout(300)
-
-            # 从详情页提取订单信息
-            platform_sku = self._extract_platform_sku_from_detail()
-            sku_info = parse_platform_sku(platform_sku) if platform_sku else None
-
-            # 从详情页提取名称
-            name1 = self._extract_name_from_detail("Name 1")
-            name2 = self._extract_name_from_detail("Name 2")
-
-            # 如果 Name 1 为空，尝试 Name Engraving（单 SKU 场景）
-            if not name1:
-                name1 = self._extract_name_from_detail("Name Engraving")
-                # 单个刻字场景没有 Name 2，保持为空
-
-            logger.info(f"当前订单: SKU={platform_sku}, Name1={name1}, Name2={name2}")
 
             if not self._detail_context_ready():
                 logger.warning("详情弹窗未就绪，跳过审核与配对")
@@ -1202,62 +1186,333 @@ class DianXiaoMiAutomation:
                 logger.info("订单已配对，跳过")
                 return True
 
-            # 未配对订单处理
-            logger.info("订单未配对，开始配对流程")
+            # 提取所有产品信息
+            products = self._extract_all_products_from_detail()
+            if not products:
+                logger.warning("未找到产品信息")
+                return False
 
-            # 检查是否为 engraved 订单
-            if sku_info and sku_info["custom_type"] != "engraved":
-                logger.info("非定制订单，跳过配对")
+            # 筛选 engraved 产品
+            engraved_products = [p for p in products if "engraved" in p["sku"].lower()]
+            if not engraved_products:
+                logger.info("没有 engraved 产品，跳过配对")
                 return True
 
-            if not name1:
-                logger.warning("缺少 Name1，无法配对")
-                self.save_debug_info("detail_missing_name1")
-                return False
+            logger.info(f"找到 {len(engraved_products)} 个 engraved 产品")
 
-            # 点击配对商品SKU链接
-            if not self.click_pair_sku_button():
-                logger.warning("点击配对链接失败")
-                return False
+            # 检查是否为多SKU情况（相同平台SKU，不同名字）
+            # 按平台SKU分组
+            sku_groups = {}
+            for p in engraved_products:
+                sku = p["sku"]
+                if sku not in sku_groups:
+                    sku_groups[sku] = []
+                sku_groups[sku].append(p)
 
-            # 生成新 SKU
-            if sku_info:
-                # 先生成单个SKU
-                single_sku = generate_single_sku(
-                    sku_info["product_code"],
-                    date_str,
-                    name1,
-                    name2
-                )
+            # 找出需要多SKU处理的组（相同平台SKU有多个产品）
+            multi_sku_groups = {sku: prods for sku, prods in sku_groups.items() if len(prods) > 1}
 
-                # 再生成组合SKU
-                combo_sku = generate_combo_sku(
-                    single_sku,
-                    sku_info["card_code"],
-                    sku_info["box_type"]
-                )
-
-                logger.info(f"生成单个 SKU: {single_sku}")
-                logger.info(f"生成组合 SKU: {combo_sku}")
-
-                # 只使用组合SKU进行配对（不降级）
-                logger.info("尝试配对组合 SKU...")
-                if self.search_and_select_sku(combo_sku):
-                    logger.info("✅ 组合 SKU 配对成功")
-                    self.page.wait_for_timeout(1000)
-                    # 注意：不自动点击审核，让用户手动审核
-                    return True
-                else:
-                    logger.error("❌ 组合 SKU 配对失败 - 请检查店小秘系统中是否存在该组合SKU")
-                    logger.error(f"   未找到的组合SKU: {combo_sku}")
-                    return False
+            if multi_sku_groups:
+                logger.info(f"🔄 检测到多SKU订单，共 {len(multi_sku_groups)} 组需要处理")
+                return self._process_multi_sku_order(multi_sku_groups, date_str)
             else:
-                logger.warning("无法解析 SKU 信息")
-                return False
+                # 单SKU情况，使用原有逻辑
+                return self._process_single_sku_order(engraved_products[0], date_str)
 
         except Exception as e:
             logger.error(f"处理订单失败: {e}")
             self.save_debug_info("process_order_error")
+            return False
+
+    def _process_single_sku_order(self, product: dict, date_str: str) -> bool:
+        """处理单SKU订单"""
+        platform_sku = product["sku"]
+        name1 = product["name1"]
+        name2 = product.get("name2", "")
+
+        logger.info(f"处理单SKU订单: SKU={platform_sku}, Name1={name1}, Name2={name2}")
+
+        sku_info = parse_platform_sku(platform_sku)
+        if not sku_info:
+            logger.warning("无法解析 SKU 信息")
+            return False
+
+        if not name1:
+            logger.warning("缺少 Name1，无法配对")
+            self.save_debug_info("detail_missing_name1")
+            return False
+
+        # 点击配对商品SKU链接
+        if not self.click_pair_sku_button():
+            logger.warning("点击配对链接失败")
+            return False
+
+        # 生成组合SKU
+        single_sku = generate_single_sku(
+            sku_info["product_code"],
+            date_str,
+            name1,
+            name2
+        )
+        combo_sku = generate_combo_sku(
+            single_sku,
+            sku_info["card_code"],
+            sku_info["box_type"]
+        )
+
+        logger.info(f"生成组合 SKU: {combo_sku}")
+
+        # 配对
+        if self.search_and_select_sku(combo_sku):
+            logger.info("✅ 组合 SKU 配对成功")
+            self.page.wait_for_timeout(1000)
+            return True
+        else:
+            logger.error(f"❌ 组合 SKU 配对失败: {combo_sku}")
+            return False
+
+    def _process_multi_sku_order(self, sku_groups: dict, date_str: str) -> bool:
+        """处理多SKU订单
+
+        流程：
+        1. 对每组相同平台SKU的产品，先配对第一个
+        2. 然后用"编辑→追加额外商品"添加剩余的
+        3. 填写数量，移除重复项，保存
+        """
+        for platform_sku, products in sku_groups.items():
+            logger.info(f"\n{'='*40}")
+            logger.info(f"处理多SKU组: {platform_sku} ({len(products)} 个产品)")
+
+            sku_info = parse_platform_sku(platform_sku)
+            if not sku_info:
+                logger.warning(f"无法解析 SKU: {platform_sku}")
+                continue
+
+            # 第一步：配对第一个产品
+            first_product = products[0]
+            if not first_product["name1"]:
+                logger.warning("第一个产品缺少 Name1")
+                continue
+
+            first_combo_sku = generate_combo_sku(
+                generate_single_sku(
+                    sku_info["product_code"],
+                    date_str,
+                    first_product["name1"],
+                    first_product.get("name2", "")
+                ),
+                sku_info["card_code"],
+                sku_info["box_type"]
+            )
+
+            logger.info(f"第1步: 配对第一个产品 - {first_product['name1']}")
+            logger.info(f"  组合SKU: {first_combo_sku}")
+
+            # 点击配对
+            if not self.click_pair_sku_button():
+                logger.warning("点击配对链接失败")
+                continue
+
+            if not self.search_and_select_sku(first_combo_sku):
+                logger.error(f"❌ 第一个产品配对失败: {first_combo_sku}")
+                continue
+
+            logger.info("✅ 第一个产品配对成功")
+            self.page.wait_for_timeout(1000)
+
+            # 第二步：生成剩余产品的组合SKU
+            remaining_products = products[1:]
+            remaining_skus = []
+            for p in remaining_products:
+                if not p["name1"]:
+                    logger.warning(f"产品缺少 Name1，跳过")
+                    continue
+                combo_sku = generate_combo_sku(
+                    generate_single_sku(
+                        sku_info["product_code"],
+                        date_str,
+                        p["name1"],
+                        p.get("name2", "")
+                    ),
+                    sku_info["card_code"],
+                    sku_info["box_type"]
+                )
+                remaining_skus.append({
+                    "combo_sku": combo_sku,
+                    "quantity": p.get("quantity", 1),
+                    "name1": p["name1"]
+                })
+
+            if not remaining_skus:
+                logger.info("没有剩余产品需要追加")
+                continue
+
+            logger.info(f"第2步: 追加 {len(remaining_skus)} 个额外产品")
+
+            # 第三步：追加额外商品
+            if not self._append_extra_products(remaining_skus):
+                logger.error("❌ 追加额外商品失败")
+                continue
+
+            # 第四步：移除重复项（数量-1个）
+            remove_count = len(products) - 1
+            logger.info(f"第3步: 移除 {remove_count} 个重复项")
+            if not self._remove_duplicate_products(remove_count):
+                logger.error("❌ 移除重复项失败")
+                continue
+
+            # 第五步：保存
+            logger.info("第4步: 保存")
+            if not self._save_product_changes():
+                logger.error("❌ 保存失败")
+                continue
+
+            logger.info(f"✅ 多SKU组处理完成: {platform_sku}")
+
+        return True
+
+    def _append_extra_products(self, products_to_add: list) -> bool:
+        """追加额外商品"""
+        try:
+            # 第1步：点击"编辑/追加"按钮
+            logger.info("点击编辑/追加...")
+            edit_append_link = self.page.get_by_role("link", name="编辑/追加")
+            if edit_append_link.count() == 0:
+                logger.warning("未找到编辑/追加链接")
+                self.save_debug_info("edit_append_not_found")
+                return False
+
+            edit_append_link.first.click()
+            self.page.wait_for_timeout(500)
+
+            # 第2步：悬停在"追加商品"上，显示下拉菜单
+            logger.info("悬停追加商品...")
+            append_link = self.page.get_by_role("link", name="追加商品")
+            if append_link.count() == 0:
+                logger.warning("未找到追加商品链接")
+                self.save_debug_info("append_link_not_found")
+                return False
+
+            append_link.first.hover()
+            self.page.wait_for_timeout(500)
+
+            # 第3步：点击下拉菜单中的"追加额外商品"
+            logger.info("点击追加额外商品...")
+            extra_product_btn = self.page.get_by_text("追加额外商品")
+            if extra_product_btn.count() == 0:
+                logger.warning("未找到追加额外商品选项")
+                self.save_debug_info("extra_product_not_found")
+                return False
+
+            extra_product_btn.first.click()
+            self.page.wait_for_timeout(1000)
+
+            # 依次搜索并选择每个SKU
+            for item in products_to_add:
+                sku = item["combo_sku"]
+                logger.info(f"  搜索SKU: {sku}")
+
+                # 输入搜索
+                search_input = self.page.locator("#newSearchWareHoseProductsValue")
+                if search_input.count() == 0:
+                    logger.warning("未找到搜索输入框")
+                    return False
+
+                search_input.fill("")
+                search_input.fill(sku)
+                self.page.wait_for_timeout(500)
+
+                # 点击搜索
+                search_btn = self.page.get_by_role("button", name="搜索")
+                if search_btn.count() > 0:
+                    search_btn.first.click()
+                else:
+                    search_input.press("Enter")
+
+                self.page.wait_for_timeout(1000)
+
+                # 点击选择
+                select_btn = self.page.get_by_role("button", name="选择").first
+                if select_btn.count() > 0:
+                    select_btn.click()
+                    logger.info(f"  ✅ 已选择: {sku}")
+                    self.page.wait_for_timeout(500)
+                else:
+                    logger.warning(f"  未找到选择按钮，SKU可能不存在: {sku}")
+
+            # 点击确定选择
+            logger.info("点击确定选择...")
+            confirm_btn = self.page.get_by_role("button", name="确定选择")
+            if confirm_btn.count() > 0:
+                confirm_btn.first.click()
+                self.page.wait_for_timeout(1000)
+            else:
+                logger.warning("未找到确定选择按钮")
+                return False
+
+            # 填写数量
+            logger.info("填写数量...")
+            for item in products_to_add:
+                quantity = item["quantity"]
+                try:
+                    qty_inputs = self.page.get_by_placeholder("填写数量").all()
+                    for qty_input in qty_inputs:
+                        try:
+                            parent_row = qty_input.locator("xpath=ancestor::tr")
+                            if parent_row.count() > 0:
+                                row_text = parent_row.inner_text()
+                                if item["name1"] in row_text:
+                                    qty_input.fill(str(quantity))
+                                    logger.info(f"  填写数量 {quantity} for {item['name1']}")
+                                    break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.debug(f"填写数量出错: {e}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"追加额外商品失败: {e}")
+            self.save_debug_info("append_extra_products_error")
+            return False
+
+    def _remove_duplicate_products(self, count: int) -> bool:
+        """移除重复的商品配对（从后往前移除）"""
+        try:
+            logger.info(f"移除 {count} 个重复项...")
+
+            for i in range(count):
+                remove_link = self.page.get_by_role("link", name="移除").last
+                if remove_link.count() > 0:
+                    remove_link.click()
+                    logger.info(f"  移除第 {i+1} 个")
+                    self.page.wait_for_timeout(500)
+                else:
+                    logger.warning(f"未找到移除链接，已移除 {i} 个")
+                    break
+
+            return True
+
+        except Exception as e:
+            logger.error(f"移除重复项失败: {e}")
+            return False
+
+    def _save_product_changes(self) -> bool:
+        """保存商品配对更改"""
+        try:
+            save_link = self.page.get_by_role("link", name="保存")
+            if save_link.count() > 0:
+                save_link.first.click()
+                self.page.wait_for_timeout(1000)
+                logger.info("✅ 保存成功")
+                return True
+            else:
+                logger.warning("未找到保存按钮")
+                return False
+
+        except Exception as e:
+            logger.error(f"保存失败: {e}")
             return False
 
     def pair_single_order(self, order_info: dict, date_str: str) -> bool:
@@ -1411,6 +1666,168 @@ class DianXiaoMiAutomation:
                     return lines[idx + 1].strip()
 
         return ""
+
+    def _extract_all_label_values_from_text(self, text: str, field_name: str) -> list:
+        """从文本中提取所有匹配的标签值（支持多个相同标签）"""
+        label_map = {
+            "Name 1": ["Name 1", "Name1", "name 1", "name1", "Text 1", "text 1", "Line 1", "line 1", "刻字1", "刻字 1", "定制1", "定制 1"],
+            "Name 2": ["Name 2", "Name2", "name 2", "name2", "Text 2", "text 2", "Line 2", "line 2", "刻字2", "刻字 2", "定制2", "定制 2"],
+            "Name Engraving": ["Name Engraving", "name engraving", "Engraving Name", "engraving name", "Name engraving", "刻字", "定制名"],
+        }
+        labels = label_map.get(field_name, [field_name])
+        values = []
+
+        for label in labels:
+            pattern = re.compile(rf"{re.escape(label)}\s*[:：]\s*([^\r\n]+)")
+            matches = pattern.findall(text)
+            for match in matches:
+                value = match.strip()
+                if value and value not in values:
+                    values.append(value)
+
+        return values
+
+    def _extract_all_products_from_detail(self) -> list:
+        """从订单详情弹窗中提取所有产品的SKU、名称和数量
+
+        Returns:
+            [
+                {"sku": "B09-B-Engraved-MAN10-LEDx1", "name1": "John", "name2": "Mary", "quantity": 1, "index": 0},
+                {"sku": "J20-G-engraved-D17-whitebox", "name1": "Tom", "name2": "Lisa", "quantity": 2, "index": 1}
+            ]
+        """
+        products = []
+        try:
+            self.page.wait_for_timeout(300)
+
+            # 首先获取详情弹窗容器
+            detail_container = self._get_detail_container()
+            if not detail_container:
+                logger.warning("未找到详情弹窗容器")
+                return products
+
+            # 方法1: 尝试从产品区块中提取（每个产品是一个独立区块）
+            product_blocks = detail_container.locator(".order-sku").all()
+
+            # 用于去重的集合
+            seen_products = set()
+
+            if product_blocks:
+                logger.info(f"找到 {len(product_blocks)} 个产品区块")
+                for idx, block in enumerate(product_blocks):
+                    try:
+                        block_text = block.inner_text()
+
+                        # 提取SKU
+                        sku_matches = re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", block_text)
+                        sku = ""
+                        for candidate in sku_matches:
+                            if parse_platform_sku(candidate):
+                                sku = candidate
+                                break
+
+                        if not sku:
+                            continue
+
+                        # 提取名称
+                        name1 = self._extract_label_value_from_text(block_text, "Name 1")
+                        name2 = self._extract_label_value_from_text(block_text, "Name 2")
+
+                        # 单SKU场景的备用
+                        if not name1:
+                            name1 = self._extract_label_value_from_text(block_text, "Name Engraving")
+
+                        # 去重：相同 (sku, name1, name2) 组合只保留一个
+                        product_key = (sku, name1, name2)
+                        if product_key in seen_products:
+                            logger.debug(f"跳过重复产品: {sku}, {name1}, {name2}")
+                            continue
+                        seen_products.add(product_key)
+
+                        # 提取数量
+                        quantity = 1
+                        try:
+                            qty_el = block.locator(".order-sku__meta > .order-sku__quantity").first
+                            if qty_el.count() > 0:
+                                qty_text = qty_el.inner_text().strip()
+                                qty_match = re.search(r'(\d+)', qty_text)
+                                if qty_match:
+                                    quantity = int(qty_match.group(1))
+                        except Exception:
+                            pass
+
+                        products.append({
+                            "sku": sku,
+                            "name1": name1,
+                            "name2": name2,
+                            "quantity": quantity,
+                            "index": idx
+                        })
+                        logger.debug(f"产品 {idx}: SKU={sku}, Name1={name1}, Name2={name2}, Qty={quantity}")
+                    except Exception as e:
+                        logger.debug(f"提取产品区块 {idx} 失败: {e}")
+                        continue
+
+            # 方法2: 如果没有找到独立区块，从整个弹窗中提取
+            if not products:
+                logger.info("未找到独立产品区块，从整个弹窗提取")
+                container_text = detail_container.inner_text()
+
+                # 提取所有SKU
+                all_skus = re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", container_text)
+                valid_skus = []
+                seen = set()
+                for candidate in all_skus:
+                    if candidate not in seen and parse_platform_sku(candidate):
+                        valid_skus.append(candidate)
+                        seen.add(candidate)
+
+                # 提取所有名称（可能有多组）
+                name1_values = self._extract_all_label_values_from_text(container_text, "Name 1")
+                name2_values = self._extract_all_label_values_from_text(container_text, "Name 2")
+
+                # 单SKU场景的备用
+                if not name1_values:
+                    name1_values = self._extract_all_label_values_from_text(container_text, "Name Engraving")
+
+                # 提取所有数量
+                quantities = []
+                try:
+                    qty_elements = detail_container.locator(".order-sku__meta > .order-sku__quantity").all()
+                    for qty_el in qty_elements:
+                        try:
+                            qty_text = qty_el.inner_text().strip()
+                            qty_match = re.search(r'(\d+)', qty_text)
+                            if qty_match:
+                                quantities.append(int(qty_match.group(1)))
+                            else:
+                                quantities.append(1)
+                        except Exception:
+                            quantities.append(1)
+                except Exception:
+                    pass
+
+                # 匹配SKU、名称和数量
+                for idx, sku in enumerate(valid_skus):
+                    name1 = name1_values[idx] if idx < len(name1_values) else ""
+                    name2 = name2_values[idx] if idx < len(name2_values) else ""
+                    quantity = quantities[idx] if idx < len(quantities) else 1
+                    products.append({
+                        "sku": sku,
+                        "name1": name1,
+                        "name2": name2,
+                        "quantity": quantity,
+                        "index": idx
+                    })
+
+            logger.info(f"共提取到 {len(products)} 个产品")
+            for p in products:
+                logger.info(f"  产品 {p['index']}: {p['sku']} (Name1={p['name1']}, Name2={p['name2']}, Qty={p.get('quantity', 1)})")
+
+        except Exception as e:
+            logger.error(f"提取所有产品失败: {e}")
+
+        return products
 
     def _extract_platform_sku_from_detail(self) -> str:
         """从订单详情弹窗中提取平台 SKU（只从弹窗内提取，不是整个页面）"""
