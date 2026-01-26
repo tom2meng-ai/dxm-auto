@@ -66,7 +66,7 @@ def load_config() -> dict:
         },
         "browser": {
             "headless": False,
-            "slow_mo": 50  # 优化：从 100 降至 50，提升操作速度
+            "slow_mo": 0  # 优化：完全移除延迟，自动化无需人眼观察
         }
     }
     try:
@@ -123,6 +123,12 @@ class DianXiaoMiAutomation:
 
         self.page = context.new_page()
         self.page.set_viewport_size({"width": 1280, "height": 800})
+
+        # 优化：拦截图片/字体等静态资源，加快页面加载
+        self.page.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,ico}", lambda route: route.abort())
+
+        # 标记是否已执行过 _dismiss_overlays
+        self._overlays_dismissed = False
 
     def close(self):
         """关闭浏览器"""
@@ -467,7 +473,10 @@ class DianXiaoMiAutomation:
         logger.info(f"打开订单详情: {order_no}")
 
         try:
-            self._dismiss_overlays()
+            # 优化：只在首次进入时关闭遮罩层，避免每单都调用
+            if not self._overlays_dismissed:
+                self._dismiss_overlays()
+                self._overlays_dismissed = True
 
             def _detail_visible() -> bool:
                 """检查详情弹窗是否可见"""
@@ -510,7 +519,7 @@ class DianXiaoMiAutomation:
                     if detail_link.count() > 0:
                         logger.info("找到详情链接，点击...")
                         detail_link.first.click(timeout=5000)
-                        self.page.wait_for_timeout(1500)
+                        # 优化：移除固定等待，_wait_detail_visible 已经会等待弹窗
                         if _wait_detail_visible():
                             logger.info("详情弹窗已打开")
                             return True
@@ -536,7 +545,7 @@ class DianXiaoMiAutomation:
             if all_detail_links.count() > 0:
                 logger.info(f"找到 {all_detail_links.count()} 个详情链接")
                 all_detail_links.first.click(timeout=5000)
-                self.page.wait_for_timeout(1500)
+                # 优化：移除固定等待，_wait_detail_visible 已经会等待弹窗
                 if _wait_detail_visible():
                     logger.info("详情弹窗已打开")
                     return True
@@ -568,7 +577,11 @@ class DianXiaoMiAutomation:
             if pair_link.count() > 0:
                 logger.info(f"找到 {pair_link.count()} 个'配对商品SKU'链接")
                 pair_link.first.click(timeout=5000)
-                self.page.wait_for_timeout(1500)
+                # 优化：等待配对弹窗出现，而不是固定等待
+                try:
+                    self.page.wait_for_selector(".ant-modal:visible", timeout=3000)
+                except:
+                    pass
                 logger.info("配对商品SKU链接点击成功")
                 return True
 
@@ -577,7 +590,11 @@ class DianXiaoMiAutomation:
             if pair_link_text.count() > 0:
                 logger.info("通过文本匹配找到配对商品SKU链接")
                 pair_link_text.click(timeout=5000)
-                self.page.wait_for_timeout(1500)
+                # 优化：等待配对弹窗出现，而不是固定等待
+                try:
+                    self.page.wait_for_selector(".ant-modal:visible", timeout=3000)
+                except:
+                    pass
                 logger.info("配对商品SKU链接点击成功（备用方案）")
                 return True
 
@@ -587,6 +604,9 @@ class DianXiaoMiAutomation:
         except Exception as e:
             logger.error(f"点击配对商品SKU链接失败: {e}")
             self.save_debug_info("pair_button_error")
+            # 修复：点击失败可能是弹窗遮挡，尝试关闭残留弹窗
+            self._close_pair_modal()
+            logger.warning("点击配对链接失败")
 
         return False
 
@@ -633,7 +653,10 @@ class DianXiaoMiAutomation:
         """点击审核按钮"""
         logger.info("点击审核按钮...")
         try:
-            self._dismiss_overlays()
+            # 优化：只在首次进入时关闭遮罩层，避免每单都调用
+            if not self._overlays_dismissed:
+                self._dismiss_overlays()
+                self._overlays_dismissed = True
             # 审核按钮通常是橙色/红色的
             btn = self.page.locator("button:has-text('审核')").first
             if btn.count() > 0 and btn.is_visible():
@@ -702,8 +725,11 @@ class DianXiaoMiAutomation:
                 logger.warning("未找到下一个按钮")
                 return False
 
-            # 等待页面响应
-            self.page.wait_for_timeout(1500)
+            # 优化：等待页面响应，使用条件等待替代固定 1500ms
+            try:
+                self.page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except:
+                self.page.wait_for_timeout(500)  # 降级为短等待
 
             # 检测是否出现"最后一个订单"的提示（依赖店小秘的实际提示）
             if self._is_last_order():
@@ -1068,17 +1094,19 @@ class DianXiaoMiAutomation:
                 search_input.press("Enter")
                 logger.info("按回车搜索")
 
-            # 等待搜索结果加载 - 优化：从 2000ms 降至 1000ms
+            # 等待搜索结果出现 - 必须使用固定等待
+            # 原因：条件等待会匹配到弹窗中已有的空元素，立即返回
+            # 店小秘搜索需要时间，等待 1.5 秒让搜索完成（折中值）
             self.page.wait_for_timeout(1000)
 
-            # 点击"选择"按钮
+            # 查找"选择"按钮 - 恢复原来的遍历逻辑，OR选择器可能匹配不到
             select_buttons = self.page.query_selector_all("button, a, span")
             select_btn = None
 
             for btn in select_buttons:
                 try:
-                    text = btn.inner_text().strip().lower()
-                    if "选择" in text or "select" in text or "选择" in text:
+                    text = btn.inner_text().strip()
+                    if text == "选择" or text == "Select":
                         if btn.is_visible():
                             select_btn = btn
                             logger.info(f"找到选择按钮: '{text}'")
@@ -1087,9 +1115,9 @@ class DianXiaoMiAutomation:
                     continue
 
             if select_btn:
+                logger.info("找到选择按钮")
                 select_btn.click(force=True)
-                self.page.wait_for_timeout(800)  # 优化：从 1500ms 降至 800ms
-                logger.info(f"点击选择按钮: {sku}")
+                self.page.wait_for_timeout(300)  # 优化：从 800ms 降至 300ms
 
                 # 点击"选择"后会弹出确认弹窗，需要点击"确定"按钮
                 # 弹窗有两个选项：默认是"仅配对这个订单"，直接点确定即可
