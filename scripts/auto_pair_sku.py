@@ -1543,8 +1543,47 @@ class DianXiaoMiAutomation:
 
         return ""
 
-    def run_pairing(self, max_orders: int = 10, date_str: str = None):
-        """运行自动配对流程"""
+    def _extract_order_no_from_detail(self) -> str:
+        """从订单详情弹窗中提取平台订单号（如 5261219-59178）"""
+        try:
+            self.page.wait_for_timeout(300)
+
+            detail_container = self._get_detail_container()
+            if not detail_container:
+                return ""
+
+            # 平台订单号通常在 .orderBagInfo 或标题区域
+            # 格式如: 5261219-59178
+            container_text = detail_container.inner_text()
+
+            # 提取平台订单号（数字-数字格式）
+            order_no_matches = re.findall(r'\b(\d{5,}-\d{4,})\b', container_text)
+            if order_no_matches:
+                logger.debug(f"从详情弹窗提取到平台订单号: {order_no_matches[0]}")
+                return order_no_matches[0]
+
+            # 尝试其他格式
+            order_no_matches = re.findall(r'\b(\d{7,})\b', container_text)
+            if order_no_matches:
+                # 过滤掉可能是日期或其他数字的
+                for match in order_no_matches:
+                    if len(match) >= 8:  # 订单号一般较长
+                        logger.debug(f"从详情弹窗提取到订单号: {match}")
+                        return match
+
+        except Exception as e:
+            logger.debug(f"提取平台订单号失败: {e}")
+
+        return ""
+
+    def run_pairing(self, max_orders: int = 10, date_str: str = None, stop_order_no: str = None):
+        """运行自动配对流程
+
+        Args:
+            max_orders: 最大处理订单数
+            date_str: 日期字符串 (MMDD)
+            stop_order_no: 截止订单号（平台订单号），处理到该订单后停止（包含该订单）
+        """
         if not date_str:
             date_str = datetime.now().strftime("%m%d")
 
@@ -1552,6 +1591,10 @@ class DianXiaoMiAutomation:
         logger.info("开始自动配对流程")
         logger.info(f"日期: {date_str}")
         logger.info(f"最大处理数量: {max_orders}")
+        if stop_order_no:
+            logger.info(f"截止订单号: {stop_order_no}")
+        else:
+            logger.info("截止订单号: 无（处理全部）")
         logger.info("=" * 50)
 
         # 启动浏览器
@@ -1596,10 +1639,22 @@ class DianXiaoMiAutomation:
                 self.page.wait_for_timeout(1500)
 
             # 在详情弹窗中循环处理订单
+            reached_stop_order = False
             for i in range(max_orders):
                 logger.info(f"\n{'='*30}")
                 logger.info(f"处理进度: {i + 1}/{max_orders}")
                 logger.info(f"{'='*30}")
+
+                # 提取当前订单的平台订单号
+                current_order_no = self._extract_order_no_from_detail()
+                if current_order_no:
+                    logger.info(f"当前平台订单号: {current_order_no}")
+
+                # 检查是否到达截止订单
+                if stop_order_no and current_order_no:
+                    if stop_order_no in current_order_no or current_order_no in stop_order_no:
+                        logger.info(f"🏁 到达截止订单: {current_order_no}")
+                        reached_stop_order = True
 
                 try:
                     # 处理当前订单
@@ -1611,6 +1666,11 @@ class DianXiaoMiAutomation:
                     logger.error(f"处理订单失败: {e}")
                     self.save_debug_info(f"order_error_{i}")
                     fail_count += 1
+
+                # 如果已到达截止订单，处理完后停止
+                if reached_stop_order:
+                    logger.info("🏁 已处理完截止订单，停止配对")
+                    break
 
                 # 点击"下一个"继续处理
                 self.page.wait_for_timeout(500)
@@ -1732,6 +1792,22 @@ def main():
     if args.save_auth:
         save_auth_mode()
     else:
+        # 交互式询问截止订单号
+        print("\n" + "=" * 50)
+        print("店小秘 SKU 自动配对脚本")
+        print("=" * 50)
+        print("\n请输入截止订单号（平台订单号，如 5261219-59178）")
+        print("- 输入订单号: 处理到该订单后停止（包含该订单）")
+        print("- 直接回车: 处理全部未配对订单")
+        stop_order_no = input("\n截止订单号: ").strip()
+
+        if stop_order_no:
+            print(f"\n✅ 将处理到订单 {stop_order_no} 为止（包含该订单）")
+        else:
+            print(f"\n✅ 将处理全部未配对订单（最多 {args.max_orders} 个）")
+
+        print("\n开始执行...\n")
+
         config = load_config()
         automation = DianXiaoMiAutomation(
             headless=args.headless,
@@ -1739,7 +1815,8 @@ def main():
         )
         automation.run_pairing(
             max_orders=args.max_orders,
-            date_str=args.date
+            date_str=args.date,
+            stop_order_no=stop_order_no if stop_order_no else None
         )
 
 
