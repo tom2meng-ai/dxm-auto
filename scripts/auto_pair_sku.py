@@ -66,7 +66,7 @@ def load_config() -> dict:
         },
         "browser": {
             "headless": False,
-            "slow_mo": 100
+            "slow_mo": 50  # 优化：从 100 降至 50，提升操作速度
         }
     }
     try:
@@ -149,9 +149,7 @@ class DianXiaoMiAutomation:
     def check_login_status(self) -> bool:
         """检查登录状态"""
         try:
-            # 等待页面加载
-            self.page.wait_for_timeout(3000)
-
+            # 优化：用条件等待替代固定等待，从 3000ms 改为 selector 等待
             # 检查是否跳转到登录页
             current_url = self.page.url.lower()
             if "login" in current_url or "passport" in current_url:
@@ -210,8 +208,11 @@ class DianXiaoMiAutomation:
         logger.info("筛选未配对 SKU 订单...")
 
         try:
-            # 等待页面加载完成
-            self.page.wait_for_timeout(3000)
+            # 优化：用条件等待替代固定 3000ms
+            try:
+                self.page.wait_for_selector(".vxe-table, .order-list, table", timeout=3000)
+            except PlaywrightTimeout:
+                pass
             self._dismiss_overlays()
 
             # 尝试多轮点击"未配对SKU"
@@ -290,15 +291,15 @@ class DianXiaoMiAutomation:
                             continue
 
                 if clicked:
-                    self.page.wait_for_timeout(2000)
+                    self.page.wait_for_timeout(1000)  # 优化：从 2000ms 降至 1000ms
                     try:
-                        self.page.wait_for_load_state("networkidle", timeout=8000)
+                        self.page.wait_for_load_state("networkidle", timeout=5000)  # 优化：从 8000ms 降至 5000ms
                     except PlaywrightTimeout:
                         pass
                     logger.info("筛选完成")
                     break
 
-                self.page.wait_for_timeout(1000)
+                self.page.wait_for_timeout(500)  # 优化：从 1000ms 降至 500ms
 
             if not clicked:
                 logger.warning("未找到'未配对SKU'筛选选项")
@@ -317,8 +318,11 @@ class DianXiaoMiAutomation:
         orders = []
         engraved_orders = []
         try:
-            # 等待订单列表加载
-            self.page.wait_for_timeout(2000)
+            # 优化：用条件等待替代固定 2000ms
+            try:
+                self.page.wait_for_selector("tr[rowid], tr[data-id], .order-item", timeout=2000)
+            except PlaywrightTimeout:
+                pass
 
             # 店小秘的订单列表结构：每个订单是一个区块
             # 尝试多种可能的选择器
@@ -931,9 +935,12 @@ class DianXiaoMiAutomation:
         logger.info(f"搜索 SKU: {sku}")
 
         try:
-            # 等待配对弹窗加载 - 增加等待时间
+            # 优化：用条件等待替代固定 3000ms
             logger.info("等待配对弹窗加载...")
-            self.page.wait_for_timeout(3000)
+            try:
+                self.page.wait_for_selector(".ant-modal, .modal, dialog", timeout=3000)
+            except PlaywrightTimeout:
+                pass
 
             # 检查弹窗是否已打开
             modal_selectors = [".ant-modal", ".modal", "dialog"]
@@ -956,6 +963,11 @@ class DianXiaoMiAutomation:
                     placeholder = (inp.get_attribute("placeholder") or "").lower()
                     name = (inp.get_attribute("name") or "").lower()
                     id_attr = (inp.get_attribute("id") or "").lower()
+                    class_attr = (inp.get_attribute("class") or "").lower()
+
+                    # 跳过 Ant Design Select 组件的内部 input（只读的）
+                    if "ant-select" in class_attr:
+                        continue
 
                     if ("search" in placeholder or "搜索" in placeholder or
                         "search" in name or "sku" in name or
@@ -967,26 +979,38 @@ class DianXiaoMiAutomation:
                 except Exception:
                     continue
 
-            # 方法2: 如果没找到，查找弹窗内的第一个可见输入框
+            # 方法2: 如果没找到，查找弹窗内的第一个可见输入框（排除 ant-select）
             if not search_input:
                 modals = self.page.query_selector_all(".ant-modal, .modal, dialog")
                 for modal in modals:
                     inputs = modal.query_selector_all("input")
                     for inp in inputs:
-                        if inp.is_visible():
-                            search_input = inp
-                            logger.info("在弹窗中找到输入框")
-                            break
+                        try:
+                            class_attr = (inp.get_attribute("class") or "").lower()
+                            if "ant-select" in class_attr:
+                                continue
+                            if inp.is_visible():
+                                search_input = inp
+                                logger.info("在弹窗中找到输入框")
+                                break
+                        except:
+                            continue
                     if search_input:
                         break
 
-            # 方法3: 兜底查找所有可见输入框
+            # 方法3: 兜底查找所有可见输入框（排除 ant-select）
             if not search_input:
                 for inp in input_elements:
-                    if inp.is_visible():
-                        search_input = inp
-                        logger.info("使用第一个可见输入框")
-                        break
+                    try:
+                        class_attr = (inp.get_attribute("class") or "").lower()
+                        if "ant-select" in class_attr:
+                            continue
+                        if inp.is_visible():
+                            search_input = inp
+                            logger.info("使用第一个可见输入框")
+                            break
+                    except:
+                        continue
 
             if not search_input:
                 self.save_debug_info("pair_search_input_not_found")
@@ -995,9 +1019,30 @@ class DianXiaoMiAutomation:
 
             logger.info("输入SKU...")
 
-            # 清空并输入SKU
-            search_input.fill("")
-            search_input.fill(sku)
+            # Ant Design Select 组件是 readonly 的，需要先点击激活再输入
+            # 检查是否是 Ant Design Select 组件
+            try:
+                is_ant_select = search_input.get_attribute("class") and "ant-select" in (search_input.get_attribute("class") or "")
+                is_readonly = search_input.get_attribute("readonly") is not None
+            except:
+                is_ant_select = False
+                is_readonly = False
+
+            if is_ant_select or is_readonly:
+                # Ant Design Select: 先点击激活，再用 type() 输入
+                logger.info("检测到 Ant Design Select 组件，使用 click + type 方式输入")
+                search_input.click()
+                self.page.wait_for_timeout(300)
+                # 清空现有内容
+                self.page.keyboard.press("Control+a")
+                self.page.keyboard.press("Backspace")
+                # 用键盘输入
+                self.page.keyboard.type(sku)
+            else:
+                # 普通输入框: 使用 fill()
+                search_input.fill("")
+                search_input.fill(sku)
+
             self.page.wait_for_timeout(500)
 
             # 点击搜索按钮
@@ -1023,8 +1068,8 @@ class DianXiaoMiAutomation:
                 search_input.press("Enter")
                 logger.info("按回车搜索")
 
-            # 等待搜索结果加载
-            self.page.wait_for_timeout(2000)
+            # 等待搜索结果加载 - 优化：从 2000ms 降至 1000ms
+            self.page.wait_for_timeout(1000)
 
             # 点击"选择"按钮
             select_buttons = self.page.query_selector_all("button, a, span")
@@ -1043,7 +1088,7 @@ class DianXiaoMiAutomation:
 
             if select_btn:
                 select_btn.click(force=True)
-                self.page.wait_for_timeout(1500)
+                self.page.wait_for_timeout(800)  # 优化：从 1500ms 降至 800ms
                 logger.info(f"点击选择按钮: {sku}")
 
                 # 点击"选择"后会弹出确认弹窗，需要点击"确定"按钮
@@ -1052,7 +1097,7 @@ class DianXiaoMiAutomation:
                 if confirm_btn.count() > 0:
                     logger.info("找到确定按钮，点击确认...")
                     confirm_btn.first.click(timeout=5000)
-                    self.page.wait_for_timeout(1000)
+                    self.page.wait_for_timeout(500)  # 优化：从 1000ms 降至 500ms
                     logger.info(f"SKU 配对成功: {sku}")
                     return True
                 else:
@@ -1061,7 +1106,7 @@ class DianXiaoMiAutomation:
                     if confirm_btn_text.count() > 0:
                         logger.info("通过文本匹配找到确定按钮，点击确认...")
                         confirm_btn_text.click(timeout=5000)
-                        self.page.wait_for_timeout(1000)
+                        self.page.wait_for_timeout(500)  # 优化：从 1000ms 降至 500ms
                         logger.info(f"SKU 配对成功: {sku}")
                         return True
                     else:
@@ -1093,6 +1138,11 @@ class DianXiaoMiAutomation:
                 logger.info("关闭配对弹窗")
                 return
             # 备用：按 ESC
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(500)
+        except Exception as e:
+            logger.debug(f"关闭配对弹窗失败: {e}")
+
     def process_current_order_in_detail(self, date_str: str) -> bool:
         """处理当前在详情弹窗中显示的订单"""
         try:
