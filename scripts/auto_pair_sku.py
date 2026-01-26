@@ -352,9 +352,6 @@ class DianXiaoMiAutomation:
             self.page.wait_for_timeout(3000)
             self._dismiss_overlays()
 
-            # 保存调试信息
-            self.save_debug_info("before_filter")
-
             # 尝试多轮点击"未配对SKU"
             clicked = False
             for attempt in range(3):
@@ -436,7 +433,6 @@ class DianXiaoMiAutomation:
                         self.page.wait_for_load_state("networkidle", timeout=8000)
                     except PlaywrightTimeout:
                         pass
-                    self.save_debug_info("after_filter")
                     logger.info("筛选完成")
                     break
 
@@ -1076,7 +1072,6 @@ class DianXiaoMiAutomation:
             # 等待配对弹窗加载 - 增加等待时间
             logger.info("等待配对弹窗加载...")
             self.page.wait_for_timeout(3000)
-            self.save_debug_info("pair_search_start")
 
             # 检查弹窗是否已打开
             modal_selectors = [".ant-modal", ".modal", "dialog"]
@@ -1352,7 +1347,6 @@ class DianXiaoMiAutomation:
         if not self.open_order_detail(order_no, row_element, row_id):
             return False
 
-        self.save_debug_info("detail_opened")
         self.page.wait_for_timeout(1000)
 
         if not self._detail_context_ready():
