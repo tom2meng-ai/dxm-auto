@@ -443,16 +443,8 @@ class DianXiaoMiAutomation:
                         end = min(start + 50, len(all_text))
                     platform_sku = all_text[start:end].strip()
 
-            # 提取 Name1, Name2（从行文本中）
-            name1 = ""
-            name2 = ""
-            all_text = row.inner_text()
-            name1_match = re.search(r'Name\s*1\s*[:：]\s*([^\n\r]+)', all_text, re.IGNORECASE)
-            if name1_match:
-                name1 = name1_match.group(1).strip()
-            name2_match = re.search(r'Name\s*2\s*[:：]\s*([^\n\r]+)', all_text, re.IGNORECASE)
-            if name2_match:
-                name2 = name2_match.group(1).strip()
+            # 注意：不在列表页提取Name，因为多SKU订单会导致名字错乱
+            # Name将在详情页通过 _extract_all_products_from_detail() 为每个SKU单独提取
 
             if order_no:
                 return {
@@ -460,8 +452,8 @@ class DianXiaoMiAutomation:
                     "platform_sku": platform_sku,
                     "row_element": row,
                     "row_id": row.get_attribute("rowid"),
-                    "name1": name1,
-                    "name2": name2
+                    "name1": "",  # 将在详情页提取
+                    "name2": ""   # 将在详情页提取
                 }
         except Exception as e:
             logger.debug(f"提取订单信息失败: {e}")
@@ -1195,7 +1187,7 @@ class DianXiaoMiAutomation:
             # 筛选 engraved 产品
             engraved_products = [p for p in products if "engraved" in p["sku"].lower()]
             if not engraved_products:
-                logger.info("没有 engraved 产品，跳过配对")
+                logger.info("⏭️ 非engraved订单，已跳过配对")
                 return True
 
             logger.info(f"找到 {len(engraved_products)} 个 engraved 产品")
@@ -1211,13 +1203,28 @@ class DianXiaoMiAutomation:
 
             # 找出需要多SKU处理的组（相同平台SKU有多个产品）
             multi_sku_groups = {sku: prods for sku, prods in sku_groups.items() if len(prods) > 1}
+            # 找出单SKU组（每个不同的SKU只有1个产品）
+            single_sku_groups = {sku: prods[0] for sku, prods in sku_groups.items() if len(prods) == 1}
 
+            # 处理所有组
+            all_success = True
+
+            # 先处理多SKU组
             if multi_sku_groups:
-                logger.info(f"🔄 检测到多SKU订单，共 {len(multi_sku_groups)} 组需要处理")
-                return self._process_multi_sku_order(multi_sku_groups, date_str)
-            else:
-                # 单SKU情况，使用原有逻辑
-                return self._process_single_sku_order(engraved_products[0], date_str)
+                logger.info(f"🔄 检测到多SKU组，共 {len(multi_sku_groups)} 组需要处理")
+                if not self._process_multi_sku_order(multi_sku_groups, date_str):
+                    all_success = False
+
+            # 再处理所有单SKU组（遍历每个不同的SKU）
+            if single_sku_groups:
+                logger.info(f"📦 检测到 {len(single_sku_groups)} 个独立SKU需要处理")
+                for sku, product in single_sku_groups.items():
+                    logger.info(f"\n--- 处理独立SKU: {sku} ---")
+                    if not self._process_single_sku_order(product, date_str):
+                        all_success = False
+                        # 单个失败不影响其他，继续处理
+
+            return all_success
 
         except Exception as e:
             logger.error(f"处理订单失败: {e}")
@@ -1483,7 +1490,7 @@ class DianXiaoMiAutomation:
             logger.info(f"移除 {count} 个重复项...")
 
             for i in range(count):
-                remove_link = self.page.get_by_role("link", name="移除").last
+                remove_link = self.page.get_by_role("link", name="移除").nth(1)
                 if remove_link.count() > 0:
                     remove_link.click()
                     logger.info(f"  移除第 {i+1} 个")
