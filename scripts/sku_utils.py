@@ -247,12 +247,15 @@ def parse_product_spec(spec: str) -> dict:
             elif key == "name engraving":
                 # 单个名字的情况
                 result["name1"] = value
+            elif key == "name":
+                # 兼容只有 Name: 的格式
+                result["name1"] = value
 
     return result
 
 
 def validate_name_format(name: str) -> tuple:
-    """验证名字只包含英文字母和数字
+    """验证名字只包含英文字母、数字、空格和连字符
 
     Args:
         name: 要验证的名字
@@ -263,12 +266,12 @@ def validate_name_format(name: str) -> tuple:
     if not name:
         return True, set()
 
-    # 只允许 a-z, A-Z, 0-9
-    if re.match(r'^[a-zA-Z0-9]+$', name):
+    # 只允许 a-z, A-Z, 0-9, 空格和连字符
+    if re.match(r'^[a-zA-Z0-9 \-]+$', name):
         return True, set()
 
-    # 找出无效字符
-    invalid_chars = {c for c in name if not c.isalnum() or ord(c) > 127}
+    # 找出无效字符（排除空格和连字符）
+    invalid_chars = {c for c in name if c not in ' -' and (not c.isalnum() or ord(c) > 127)}
     return False, invalid_chars
 
 
