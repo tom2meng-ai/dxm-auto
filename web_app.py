@@ -301,6 +301,10 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
         box_type = sku_info["box_type"]
         name1 = spec_info["name1"]
         name2 = spec_info["name2"]
+        name3 = spec_info.get("name3", "")
+        name4 = spec_info.get("name4", "")
+        name5 = spec_info.get("name5", "")
+        name6 = spec_info.get("name6", "")
 
         # 检查卡片代码置信度
         if sku_info.get("card_confidence") == "low" and card_code:
@@ -319,10 +323,11 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
             })
             logs.append(f"⚠️ 卡片代码识别不确定: {order_no} - {card_code}")
 
-        # 生成唯一SKU
+        # 生成唯一SKU（支持多个名字）
         single_sku = generate_single_sku_unique(
-            product_code, date_str, name1, name2,
-            order_no, sku_counter
+            product_code, date_str,
+            order_no, sku_counter,
+            name1, name2, name3, name4, name5, name6
         )
 
         # 生成识别码

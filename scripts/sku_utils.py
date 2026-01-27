@@ -290,33 +290,37 @@ def validate_name2_required(spec_info: dict) -> tuple:
     return True, ""
 
 
-def generate_single_sku(product_code: str, date_str: str, name1: str, name2: str = "") -> str:
+def generate_single_sku(product_code: str, date_str: str, *names) -> str:
     """生成单个 SKU
 
-    格式: Michael-{产品编号}-{MMDD}-{Name1}+{Name2}
-    示例: Michael-J20-0121-Xaviar+Suzi
+    格式: Michael-{产品编号}-{MMDD}-{Name1}+{Name2}+...
+    示例: Michael-J20-0121-Xaviar+Suzi+Tom
+
+    Args:
+        product_code: 产品编号
+        date_str: 日期字符串 (MMDD)
+        *names: 可变数量的名字 (name1, name2, name3, ...)
     """
-    names = f"{name1}+{name2}" if name2 else name1
-    return f"{STORE_NAME}-{product_code}-{date_str}-{names}"
+    names_str = "+".join([n for n in names if n])  # 过滤空名字，用+连接
+    return f"{STORE_NAME}-{product_code}-{date_str}-{names_str}"
 
 
-def generate_single_sku_unique(product_code: str, date_str: str, name1: str, name2: str,
-                               order_no: str, sku_counter: dict) -> str:
+def generate_single_sku_unique(product_code: str, date_str: str,
+                               order_no: str, sku_counter: dict, *names) -> str:
     """生成唯一SKU，重复时自动添加订单号后缀
 
     Args:
         product_code: 产品编号
         date_str: 日期字符串 (MMDD)
-        name1: 第一个名字
-        name2: 第二个名字（可选）
         order_no: 完整订单号
         sku_counter: SKU计数器字典
+        *names: 可变数量的名字 (name1, name2, name3, ...)
 
     Returns:
         唯一的SKU字符串
     """
-    names = f"{name1}+{name2}" if name2 else name1
-    base_sku = f"{STORE_NAME}-{product_code}-{date_str}-{names}"
+    names_str = "+".join([n for n in names if n])  # 过滤空名字，用+连接
+    base_sku = f"{STORE_NAME}-{product_code}-{date_str}-{names_str}"
 
     # 检测重复
     if base_sku not in sku_counter:

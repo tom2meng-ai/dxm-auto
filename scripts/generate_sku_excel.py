@@ -195,9 +195,13 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         box_type = sku_info["box_type"]
         name1 = spec_info["name1"]
         name2 = spec_info["name2"]
+        name3 = spec_info.get("name3", "")
+        name4 = spec_info.get("name4", "")
+        name5 = spec_info.get("name5", "")
+        name6 = spec_info.get("name6", "")
 
-        # 生成 SKU
-        single_sku = generate_single_sku(product_code, date_str, name1, name2)
+        # 生成 SKU（支持多个名字）
+        single_sku = generate_single_sku(product_code, date_str, name1, name2, name3, name4, name5, name6)
         combo_sku = generate_combo_sku(single_sku, card_code, box_type)
 
         # 获取报关名
