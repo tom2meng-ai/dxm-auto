@@ -555,13 +555,39 @@ class DianXiaoMiAutomation:
         return False
 
 
-    def click_pair_sku_button(self):
-        """点击配对商品SKU链接"""
+    def click_pair_sku_button(self, product_sku: str = None):
+        """点击配对商品SKU链接
+
+        Args:
+            product_sku: 可选，指定要配对的产品SKU，用于定位正确的配对链接
+        """
         logger.info("点击配对商品SKU链接...")
 
         try:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
             self.page.wait_for_timeout(500)
+
+            # 如果指定了产品SKU，先定位到包含该SKU的产品区块，再点击其配对链接
+            if product_sku:
+                logger.info(f"定位产品SKU: {product_sku}")
+                # 找到包含该SKU文本的元素，然后向上找到产品区块（通常是tr或div容器）
+                # 使用 :has() 选择器找到包含该SKU的行
+                product_row = self.page.locator(f"tr:has-text('{product_sku}')")
+                if product_row.count() > 0:
+                    # 在该行内找配对链接
+                    pair_link = product_row.first.get_by_role("link", name="配对商品SKU")
+                    if pair_link.count() > 0:
+                        logger.info(f"在产品行内找到配对链接")
+                        pair_link.first.click(timeout=5000)
+                        try:
+                            self.page.wait_for_selector(".ant-modal:visible", timeout=3000)
+                        except:
+                            pass
+                        logger.info("配对商品SKU链接点击成功（精确定位）")
+                        return True
+                    else:
+                        logger.warning(f"产品 {product_sku} 行内未找到配对链接，可能已配对")
+                        return False  # 不要回退到通用逻辑，避免配对错误的产品
 
             # 核心方法：使用 getByRole 精确定位"配对商品SKU"链接
             # 根据 playwright codegen 录制结果：page.getByRole('link', { name: '配对商品SKU' })
@@ -1249,8 +1275,8 @@ class DianXiaoMiAutomation:
             self.save_debug_info("detail_missing_name1")
             return False
 
-        # 点击配对商品SKU链接
-        if not self.click_pair_sku_button():
+        # 点击配对商品SKU链接（传递产品SKU以精确定位）
+        if not self.click_pair_sku_button(product_sku=platform_sku):
             logger.warning("点击配对链接失败")
             return False
 
