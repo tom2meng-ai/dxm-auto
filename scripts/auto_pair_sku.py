@@ -1997,6 +1997,7 @@ class DianXiaoMiAutomation:
             # 处理订单
             success_count = 0
             fail_count = 0
+            failed_orders = []  # 记录失败的订单信息
 
             # 打开第一个订单详情
             if orders:
@@ -2037,10 +2038,24 @@ class DianXiaoMiAutomation:
                         success_count += 1
                     else:
                         fail_count += 1
+                        # 记录失败订单
+                        order_no = current_order_no if current_order_no else self._extract_order_no_from_detail()
+                        failed_orders.append({
+                            "index": i + 1,
+                            "order_no": order_no or f"第{i+1}个订单",
+                            "reason": "配对失败"
+                        })
                 except Exception as e:
                     logger.error(f"处理订单失败: {e}")
                     self.save_debug_info(f"order_error_{i}")
                     fail_count += 1
+                    # 记录失败订单
+                    order_no = current_order_no if current_order_no else self._extract_order_no_from_detail()
+                    failed_orders.append({
+                        "index": i + 1,
+                        "order_no": order_no or f"第{i+1}个订单",
+                        "reason": str(e)
+                    })
 
                 # 如果已到达截止订单，处理完后停止
                 if reached_stop_order:
@@ -2068,6 +2083,17 @@ class DianXiaoMiAutomation:
             logger.info("配对完成!")
             logger.info(f"成功: {success_count}")
             logger.info(f"失败: {fail_count}")
+
+            # 打印失败订单详情
+            if failed_orders:
+                logger.info("\n" + "-" * 50)
+                logger.info("失败订单列表:")
+                logger.info("-" * 50)
+                for order in failed_orders:
+                    logger.info(f"  [{order['index']}] 订单号: {order['order_no']}")
+                    logger.info(f"       原因: {order['reason']}")
+                logger.info("-" * 50)
+
             logger.info("=" * 50)
 
         except Exception as e:
