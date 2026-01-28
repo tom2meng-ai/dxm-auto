@@ -567,17 +567,20 @@ class DianXiaoMiAutomation:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
             self.page.wait_for_timeout(500)
 
-            # 如果指定了产品SKU，先定位到包含该SKU的产品区块，再点击其配对链接
+            # 如果指定了产品SKU，先定位到包含该SKU的产品区块，再点击其配对单元格
             if product_sku:
                 logger.info(f"定位产品SKU: {product_sku}")
-                # 找到包含该SKU文本的元素，然后向上找到产品区块（通常是tr或div容器）
-                # 使用 :has() 选择器找到包含该SKU的行
-                product_row = self.page.locator(f"tr:has-text('{product_sku}')")
-                if product_row.count() > 0:
-                    # 在该行内找配对链接
-                    pair_link = product_row.first.get_by_role("link", name="配对商品SKU")
+                # 找到包含该SKU文本的产品区块（.order-sku 或 tr）
+                # 优先尝试 .order-sku（详情弹窗结构），再尝试 tr（表格结构）
+                product_block = self.page.locator(f".order-sku:has-text('{product_sku}')")
+                if product_block.count() == 0:
+                    product_block = self.page.locator(f"tr:has-text('{product_sku}')")
+
+                if product_block.count() > 0:
+                    # 在该区块内找配对链接 - 根据codegen录制：getByRole('link', { name: '配对商品SKU' })
+                    pair_link = product_block.first.get_by_role("link", name="配对商品SKU")
                     if pair_link.count() > 0:
-                        logger.info(f"在产品行内找到配对链接")
+                        logger.info(f"在产品区块内找到配对链接")
                         pair_link.first.click(timeout=5000)
                         try:
                             self.page.wait_for_selector(".ant-modal:visible", timeout=3000)
@@ -586,11 +589,12 @@ class DianXiaoMiAutomation:
                         logger.info("配对商品SKU链接点击成功（精确定位）")
                         return True
                     else:
-                        logger.warning(f"产品 {product_sku} 行内未找到配对链接，可能已配对")
-                        return False  # 不要回退到通用逻辑，避免配对错误的产品
+                        # 区块内找不到，尝试在父容器中查找与该SKU关联的配对入口
+                        logger.info(f"区块内未找到配对单元格，尝试查找关联的配对入口...")
+                        # 不要直接返回失败，继续尝试通用方法
 
             # 核心方法：使用 getByRole 精确定位"配对商品SKU"链接
-            # 根据 playwright codegen 录制结果：page.getByRole('link', { name: '配对商品SKU' })
+            # 根据codegen录制：page.getByRole('link', { name: '配对商品SKU' })
             pair_link = self.page.get_by_role("link", name="配对商品SKU")
             if pair_link.count() > 0:
                 logger.info(f"找到 {pair_link.count()} 个'配对商品SKU'链接")
@@ -604,16 +608,15 @@ class DianXiaoMiAutomation:
                 return True
 
             # 备用方案：使用文本匹配
-            pair_link_text = self.page.locator("a:has-text('配对商品SKU')").first
-            if pair_link_text.count() > 0:
-                logger.info("通过文本匹配找到配对商品SKU链接")
-                pair_link_text.click(timeout=5000)
-                # 优化：等待配对弹窗出现，而不是固定等待
+            pair_text = self.page.locator("text=配对商品SKU").first
+            if pair_text.count() > 0:
+                logger.info("通过文本匹配找到'配对商品SKU'")
+                pair_text.click(timeout=5000)
                 try:
                     self.page.wait_for_selector(".ant-modal:visible", timeout=3000)
                 except:
                     pass
-                logger.info("配对商品SKU链接点击成功（备用方案）")
+                logger.info("'配对商品SKU'点击成功（备用方案）")
                 return True
 
             self.save_debug_info("pair_button_not_found")
@@ -1755,6 +1758,8 @@ class DianXiaoMiAutomation:
                         sku_matches = re.findall(r"[A-Z]\d{2,}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", block_text)
                         sku = ""
                         for candidate in sku_matches:
+                            # 去掉末尾可能误匹配的数量标记（如 x1, x2）
+                            candidate = re.sub(r'x\d+$', '', candidate)
                             if parse_platform_sku(candidate):
                                 sku = candidate
                                 break
