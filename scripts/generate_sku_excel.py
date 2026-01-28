@@ -81,6 +81,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     single_sku_rows = []
     combo_sku_rows = []
     error_rows = []
+    partial_success_count = 0  # 部分成功计数（单个SKU成功，组合SKU跳过）
 
     # 加载卡片对应表
     card_mapping = load_card_mapping()
@@ -202,7 +203,6 @@ def process_orders(input_file: str, date_str: str) -> tuple:
 
         # 生成 SKU（支持多个名字）
         single_sku = generate_single_sku(product_code, date_str, name1, name2, name3, name4, name5, name6)
-        combo_sku = generate_combo_sku(single_sku, card_code, box_type)
 
         # 获取报关名
         en_declare, cn_declare = get_declare_names(product_code)
@@ -239,6 +239,20 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         }
         single_sku_rows.append(single_row)
 
+        # 检查卡片映射有效性 - 如果卡片代码存在但在映射中找不到，记录错误并跳过组合SKU
+        if card_code and card_code not in card_mapping:
+            error_rows.append({
+                "订单号": order_no,
+                "平台SKU": platform_sku,
+                "错误原因": f"卡片代码未找到: {card_code}，单个SKU已创建，组合SKU跳过"
+            })
+            logger.warning(f"订单 {order_no}: 卡片代码 {card_code} 未找到，跳过组合SKU创建")
+            partial_success_count += 1  # 部分成功：单个SKU创建了，但组合SKU跳过
+            continue  # 跳过后续的组合SKU创建
+
+        # 生成组合SKU（移到这里，只有卡片有效时才生成）
+        combo_sku = generate_combo_sku(single_sku, card_code, box_type)
+
         # 组合 SKU 记录 - 主商品行
         combo_main_row = {
             "*组合sku": combo_sku,
@@ -268,8 +282,8 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         }
         combo_sku_rows.append(combo_main_row)
 
-        # 组合 SKU 记录 - 卡片行
-        if card_code and card_code in card_mapping:
+        # 组合 SKU 记录 - 卡片行（此时卡片代码已验证有效）
+        if card_code:
             card_sku = card_mapping[card_code]
             combo_card_row = {
                 "*组合sku": combo_sku,
@@ -277,8 +291,6 @@ def process_orders(input_file: str, date_str: str) -> tuple:
                 "*数量": 1,
             }
             combo_sku_rows.append(combo_card_row)
-        elif card_code:
-            logger.warning(f"未找到卡片代码对应的 SKU: {card_code}")
 
         # 组合 SKU 记录 - 红盒行（如果是 LED 盒子）
         if "led" in box_type.lower():
@@ -299,14 +311,16 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     # 数量核对
     success_count = len(single_df)
     error_count = len(error_df)
-    total_check = success_count + error_count
+    # 部分成功的订单同时出现在 single_df 和 error_df 中，需要减去避免重复计算
+    total_check = success_count + error_count - partial_success_count
 
     logger.info("=" * 50)
     logger.info("数量核对")
     logger.info("=" * 50)
     logger.info(f"输入文件总行数: {total_rows}")
-    logger.info(f"成功导出订单数: {success_count}")
-    logger.info(f"错误/跳过订单数: {error_count}")
+    logger.info(f"完全成功订单数: {success_count - partial_success_count}")
+    logger.info(f"部分成功订单数: {partial_success_count} (单个SKU已创建，组合SKU跳过)")
+    logger.info(f"完全失败订单数: {error_count - partial_success_count}")
     logger.info(f"处理总数: {total_check}")
 
     if total_check == total_rows:
