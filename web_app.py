@@ -354,7 +354,7 @@ def process_orders(df: pd.DataFrame, date_str: str) -> tuple:
         identifier_set.add(identifier)
 
         # 生成组合SKU
-        combo_sku = generate_combo_sku(single_sku, card_code, box_type)
+        combo_sku = generate_combo_sku(product_code, date_str, name1, name2, card_code, box_type, order_no)
 
         # 单个 SKU 记录
         single_row = {

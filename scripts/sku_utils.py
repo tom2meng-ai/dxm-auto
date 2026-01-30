@@ -355,22 +355,33 @@ def generate_single_sku_unique(product_code: str, date_str: str,
     return unique_sku
 
 
-def generate_combo_sku(single_sku: str, card_code: str, box_type: str) -> str:
-    """生成组合 SKU
+def generate_combo_sku(product_code: str, date_str: str, name1: str, name2: str, card_code: str, box_type: str, order_no: str) -> str:
+    """生成组合 SKU（只使用前2个名字）
 
-    格式: {单个SKU}-{卡片代码}-{盒子类型简写}
-    示例: Michael-J20-0121-Xaviar+Suzi-D17-WH
+    格式: Michael-{产品编号}-{日期}-{Name1+Name2}-{卡片代码}-{盒子类型简写}-{订单号后缀}
+    示例: Michael-J20-0121-Xaviar+Suzi-D17-WH-59178
 
     Args:
-        single_sku: 单个SKU
+        product_code: 产品编号 (如 J20, B09)
+        date_str: 日期字符串 (格式: MMDD)
+        name1: 第一个名字
+        name2: 第二个名字
         card_code: 卡片代码
         box_type: 盒子类型（whitebox 或 ledbox）
+        order_no: 订单号 (如 5261219-59178)
 
     Returns:
         组合SKU字符串
     """
+    # 只使用前2个名字构建名字部分
+    names_str = "+".join([n for n in [name1, name2] if n])
+    base_sku = f"{STORE_NAME}-{product_code}-{date_str}-{names_str}"
     box_short = "LED" if "led" in box_type.lower() else "WH"
-    return f"{single_sku}-{card_code}-{box_short}"
+
+    # 提取订单号后缀（取最后一段）
+    order_suffix = order_no.split('-')[-1]
+
+    return f"{base_sku}-{card_code}-{box_short}-{order_suffix}"
 
 
 def generate_identifier(order_no: str, product_code: str, name1: str) -> str:

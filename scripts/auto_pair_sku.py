@@ -1283,17 +1283,21 @@ class DianXiaoMiAutomation:
             logger.warning("点击配对链接失败")
             return False
 
+        # 提取当前订单号
+        current_order_no = self._extract_order_no_from_detail()
+        if not current_order_no:
+            logger.warning("无法提取订单号，配对可能失败")
+            return False
+
         # 生成组合SKU
-        single_sku = generate_single_sku(
+        combo_sku = generate_combo_sku(
             sku_info["product_code"],
             date_str,
             name1,
-            name2
-        )
-        combo_sku = generate_combo_sku(
-            single_sku,
+            name2,
             sku_info["card_code"],
-            sku_info["box_type"]
+            sku_info["box_type"],
+            current_order_no
         )
 
         logger.info(f"生成组合 SKU: {combo_sku}")
@@ -1324,6 +1328,12 @@ class DianXiaoMiAutomation:
                 logger.warning(f"无法解析 SKU: {platform_sku}")
                 continue
 
+            # 提取当前订单号
+            current_order_no = self._extract_order_no_from_detail()
+            if not current_order_no:
+                logger.warning("无法提取订单号，跳过该组")
+                continue
+
             # 第一步：配对第一个产品
             first_product = products[0]
             if not first_product["name1"]:
@@ -1331,14 +1341,13 @@ class DianXiaoMiAutomation:
                 continue
 
             first_combo_sku = generate_combo_sku(
-                generate_single_sku(
-                    sku_info["product_code"],
-                    date_str,
-                    first_product["name1"],
-                    first_product.get("name2", "")
-                ),
+                sku_info["product_code"],
+                date_str,
+                first_product["name1"],
+                first_product.get("name2", ""),
                 sku_info["card_code"],
-                sku_info["box_type"]
+                sku_info["box_type"],
+                current_order_no
             )
 
             logger.info(f"第1步: 配对第一个产品 - {first_product['name1']}")
@@ -1364,14 +1373,13 @@ class DianXiaoMiAutomation:
                     logger.warning(f"产品缺少 Name1，跳过")
                     continue
                 combo_sku = generate_combo_sku(
-                    generate_single_sku(
-                        sku_info["product_code"],
-                        date_str,
-                        p["name1"],
-                        p.get("name2", "")
-                    ),
+                    sku_info["product_code"],
+                    date_str,
+                    p["name1"],
+                    p.get("name2", ""),
                     sku_info["card_code"],
-                    sku_info["box_type"]
+                    sku_info["box_type"],
+                    current_order_no
                 )
                 remaining_skus.append({
                     "combo_sku": combo_sku,

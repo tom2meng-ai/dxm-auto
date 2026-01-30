@@ -252,7 +252,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
             continue  # 跳过后续的组合SKU创建
 
         # 生成组合SKU（移到这里，只有卡片有效时才生成）
-        combo_sku = generate_combo_sku(single_sku, card_code, box_type)
+        combo_sku = generate_combo_sku(product_code, date_str, name1, name2, card_code, box_type, order_no)
 
         # 组合 SKU 记录 - 主商品行
         combo_main_row = {
