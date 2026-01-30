@@ -37,7 +37,7 @@ from sku_utils import (
     load_card_mapping,
     parse_platform_sku,
     parse_product_spec,
-    generate_single_sku,
+    generate_single_sku_unique,
     generate_combo_sku,
     get_chinese_name,
     get_declare_names,
@@ -82,6 +82,7 @@ def process_orders(input_file: str, date_str: str) -> tuple:
     combo_sku_rows = []
     error_rows = []
     partial_success_count = 0  # 部分成功计数（单个SKU成功，组合SKU跳过）
+    sku_counter = {}  # SKU去重计数器（忽略大小写）
 
     # 加载卡片对应表
     card_mapping = load_card_mapping()
@@ -201,8 +202,8 @@ def process_orders(input_file: str, date_str: str) -> tuple:
         name5 = spec_info.get("name5", "")
         name6 = spec_info.get("name6", "")
 
-        # 生成 SKU（支持多个名字）
-        single_sku = generate_single_sku(product_code, date_str, name1, name2, name3, name4, name5, name6)
+        # 生成 SKU（支持多个名字，忽略大小写去重）
+        single_sku = generate_single_sku_unique(product_code, date_str, order_no, sku_counter, name1, name2, name3, name4, name5, name6)
 
         # 获取报关名
         en_declare, cn_declare = get_declare_names(product_code)

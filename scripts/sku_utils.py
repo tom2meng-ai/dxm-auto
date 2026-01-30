@@ -215,6 +215,9 @@ def parse_product_spec(spec: str) -> dict:
         "name4": "",
         "name5": "",
         "name6": "",
+        "name_count": None,  # 期望的名字数量（如果有提供 No.of names）
+        "name1_key_seen": False,
+        "name2_key_seen": False,
         "has_dual_name_format": False,  # 是否使用双名字格式(Name 1/Name 2)
     }
 
@@ -227,15 +230,16 @@ def parse_product_spec(spec: str) -> dict:
             key, value = line.split(":", 1)
             key = key.strip().lower()
             value = value.strip()
+            normalized_key = re.sub(r"[\s\.]+", "", key)
 
             if key == "variants":
                 result["variants"] = value
             elif key == "name 1":
                 result["name1"] = value
-                result["has_dual_name_format"] = True  # 标记为双名字格式
+                result["name1_key_seen"] = True
             elif key == "name 2":
                 result["name2"] = value
-                result["has_dual_name_format"] = True  # 标记为双名字格式
+                result["name2_key_seen"] = True
             elif key == "name 3":
                 result["name3"] = value
             elif key == "name 4":
@@ -250,6 +254,14 @@ def parse_product_spec(spec: str) -> dict:
             elif key == "name":
                 # 兼容只有 Name: 的格式
                 result["name1"] = value
+            elif normalized_key in {"noofnames", "numberofnames"}:
+                match = re.search(r"\d+", value)
+                if match:
+                    result["name_count"] = int(match.group())
+
+    # 只有在明确看到 Name 2 或者 No.of names >= 2 时，才认定为双名字格式
+    if result["name2_key_seen"] or (result["name_count"] and result["name_count"] >= 2):
+        result["has_dual_name_format"] = True
 
     return result
 
@@ -284,7 +296,15 @@ def validate_name2_required(spec_info: dict) -> tuple:
     Returns:
         (is_valid, error_message)
     """
-    if spec_info.get("has_dual_name_format", False):
+    name_count = spec_info.get("name_count")
+    name2_key_seen = spec_info.get("name2_key_seen", False)
+
+    # 如果明确标注 No.of names = 1，则不要求 Name2
+    if name_count == 1:
+        return True, ""
+
+    # 如果明确是双名字格式，或者看到了 Name2 字段但为空
+    if spec_info.get("has_dual_name_format", False) or name2_key_seen:
         if not spec_info.get("name2", "").strip():
             return False, "订单使用双名字格式(Name 1/Name 2)，但 Name 2 为空"
     return True, ""
@@ -322,10 +342,11 @@ def generate_single_sku_unique(product_code: str, date_str: str,
     names_str = "+".join([n for n in names if n])  # 过滤空名字，用+连接
     base_sku = f"{STORE_NAME}-{product_code}-{date_str}-{names_str}"
 
-    # 检测重复
-    if base_sku not in sku_counter:
-        sku_counter[base_sku] = 1
-        return base_sku
+    # 检测重复（忽略大小写）
+    lookup_key = base_sku.lower()
+    if lookup_key not in sku_counter:
+        sku_counter[lookup_key] = 1
+        return base_sku  # 返回原始大小写
 
     # 添加订单号后缀
     order_suffix = order_no.split('-')[-1]
@@ -408,4 +429,3 @@ def validate_excel_columns(df, required_columns: list = None) -> tuple:
         return False, missing_columns, message
 
     return True, [], ""
-
