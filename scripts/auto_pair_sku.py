@@ -701,6 +701,12 @@ class DianXiaoMiAutomation:
         try:
             # 注意：不要调用 _dismiss_overlays()，因为详情弹窗需要保持打开
 
+            # 等待"下一个"按钮出现（最多1秒）
+            try:
+                self.page.wait_for_selector("button:has-text('下一个')", timeout=1000)
+            except PlaywrightTimeout:
+                pass  # 超时后继续尝试其他方法
+
             # 使用 getByRole 精确定位"下一个"按钮
             next_btn = self.page.get_by_role("button", name="下一个")
             clicked = False
